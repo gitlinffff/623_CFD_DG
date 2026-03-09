@@ -26,6 +26,6 @@ QuadratureRule getQuadratureRule(int order);
  * Pre-computes basis functions and their gradients at all quadrature points.
  * Returns a vector with layout: [Basis i][Quad q][phi, dphi/dxi, dphi/deta, weight]
  */
-std::vector<double> computePhiQ(int order);
+std::vector<BasisEval> computePhiQ(int order);
 
 #endif // QUAD_HPP

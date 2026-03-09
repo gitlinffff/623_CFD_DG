@@ -3,25 +3,25 @@
 #include <cstring>
 
 namespace {
-const double PI = 3.14159265358979323846;
+	const double PI = 3.14159265358979323846;
 }
 
 ProblemParams::ProblemParams() {
-    rho0 = 1.0;
-    a0 = 1.0;
-    gammad = 1.4;
-    alpha = 50.0 * PI / 180.0;  /* 50 deg */
-    double p0 = getp0(rho0, a0, gammad);
-    pout = 0.7 * p0;
-    /* Unsteady wake (proj.pdf): Vrot=a0, delta_y=18mm, fwake=0.1, delta=0.1 */
-    Vrot = 1.0;
-    delta_y = 18;
-    fwake = 0.1;
-    delta_wake = 0.1;
+	rho0 = 1.0;
+	a0 = 1.0;
+	gammad = 1.4;
+	alpha = 50.0 * PI / 180.0;  /* 50 deg */
+	double p0 = getp0(rho0, a0, gammad);
+	pout = 0.7 * p0;
+	/* Unsteady wake (proj.pdf): Vrot=a0, delta_y=18mm, fwake=0.1, delta=0.1 */
+	Vrot = 1.0;
+	delta_y = 18;
+	fwake = 0.1;
+	delta_wake = 0.1;
 }
 
 double getp0(const ProblemParams& p) {
-    return getp0(p.rho0, p.a0, p.gammad);
+	return getp0(p.rho0, p.a0, p.gammad);
 }
 
 

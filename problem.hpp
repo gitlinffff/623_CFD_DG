@@ -31,6 +31,6 @@ double getp0(const ProblemParams& p);
  * Ne: number of elements
  * M: Mach number (e.g. 0.1 for steady init)
  */
-void initialize_uniform(double* U, int Ne, int order, double M, const ProblemParams& params) {
+void initialize_uniform(double* U, int Ne, int order, double M, const ProblemParams& params);
 
 #endif

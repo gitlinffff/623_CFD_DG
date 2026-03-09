@@ -18,6 +18,8 @@
   // Note, the coordinates in the x* variables are sequential pairs x,y
   //       e.g. x2 = [x21 y21  x22 y22  x23 y23]
 
+typedef double real;
+
 
   // Order 1 Dunavant Points
   int n1 = 1;

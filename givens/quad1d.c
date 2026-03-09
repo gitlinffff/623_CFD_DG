@@ -1,4 +1,5 @@
-  
+typedef double real;
+ 
   // Order 1 Gauss-Legendre points
   int n1 = 1;
   real x1[] = {

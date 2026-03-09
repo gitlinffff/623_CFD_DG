@@ -1,12 +1,10 @@
-#include <vector>
-#include <Eigen/Dense>
+#include "term2.hpp"
 #include "physics.hpp"
-#include "quad.hpp"
-#include "readgri.hpp"
-#include "problem.hpp"
+//#include "quad.hpp"
+#include "mm.hpp"
 
 //  check and test this function
-void addTerm2(const GriMesh& mesh, std::vector<double>& R, int order,
+void addTerm2(const GriMesh& mesh, double* R, int order,
 	            const std::vector<BasisEval>& phiq, const double* U,
 							const ProblemParams& params) {
 	int Np = (order + 1) * (order + 2) / 2;
@@ -24,12 +22,12 @@ void addTerm2(const GriMesh& mesh, std::vector<double>& R, int order,
 				double phi_val = phiq[i * quad.nq + q].phi;
 				for (int var = 0; var < 4; ++var) {
 					// U  [variable][element][node]
-					uq(var) += U(var*mesh.Ne*Np+k*Np+i) * phi_val;
+					uq(var) += U[var*mesh.Ne*Np+k*Np+i] * phi_val;
 				}
 			}
 
 			// Evaluate Physical Flux at this quad point: [Fx, Fy] each is a Vector4d
-			Eigen::Matrix<double, 4, 2> phyF = vec_phyFlux(uq.data(), params.gammad)
+			Eigen::Matrix<double, 4, 2> phyF = vec_phyFlux(uq.data(), params.gammad);
 
 			// Loop over test functions to update the residual
 			for (int i = 0; i < Np; ++i) {
