@@ -1,34 +1,8 @@
-#include <vector>
-#include <Eigen/Dense>
-#include <Eigen/Sparse>
-// need to include GriMesh
-
-
-
+#include "mm.hpp"
+#include <stdexcept>
 
 extern "C" {
 	void shapeL(double *xref, int p, double **pphi);
-}
-
-std::vector<double> Jacobian(const GriMesh& mesh, int elem) {
-	/* mapping Jacobian from reference element to a global element */
-	std::vector<double> J(4);
-	
-	// Get the indices of the three vertices for this element
-	int v1_idx = mesh.E[elem * 3 + 0];
-	int v2_idx = mesh.E[elem * 3 + 1];
-	int v3_idx = mesh.E[elem * 3 + 2];
-
-	// Access the physical (x, y) coordinates
-	double x1 = mesh.V[v1_idx * 2 + 0], y1 = mesh.V[v1_idx * 2 + 1];
-	double x2 = mesh.V[v2_idx * 2 + 0], y2 = mesh.V[v2_idx * 2 + 1];
-	double x3 = mesh.V[v3_idx * 2 + 0], y3 = mesh.V[v3_idx * 2 + 1];
-	
-	J[0] = x2-x1; // dx/dxi
-	J[1] = x3-x1; // dx/deta
-	J[2] = y2-y1; // dy/dxi
-	J[3] = y3-y1; // dy/deta
-	return J;
 }
 
 Eigen::Matrix2d Jacobian(const GriMesh& mesh, int elem) {
@@ -73,12 +47,9 @@ Eigen::MatrixXd computeRefMassMatrix(int order) {
 			}
 	}
 
-	free(phi); // shapeL uses malloc/realloc, so we must free it
+	free(phi);
 	return M_ref;
 }
-
-
-
 
 Eigen::SparseMatrix<double> computeGlobalMassMatrix(const GriMesh& mesh, int order) {
 	int Np = (order + 1) * (order + 2) / 2;
@@ -92,10 +63,10 @@ Eigen::SparseMatrix<double> computeGlobalMassMatrix(const GriMesh& mesh, int ord
 	tripletList.reserve(mesh.Ne * Np * Np);
 
 	for (int k = 0; k < mesh.Ne; ++k) {
-		std::vector<double> J = Jacobian(mesh, k);
-		double detJ = J[0] * J[3] - J[1] * J[2];
-		if (detJ <= 0.) {
-			throw std::runtime_error("detJ should not be <= 0. Mesh is not counter-clockwise");
+		Eigen::Matrix2d J = Jacobian(mesh, k);
+		double detJ = J.determinant();
+		if (detJ <= 1e-15) {
+			throw std::runtime_error("Negative or zero detJ at element " + std::to_string(k));
 		}
 		//double detJ = 2.0 * mesh.Area[k];
 
@@ -112,6 +83,5 @@ Eigen::SparseMatrix<double> computeGlobalMassMatrix(const GriMesh& mesh, int ord
 	// Build the matrix from triplets
 	M.setFromTriplets(tripletList.begin(), tripletList.end());
 	M.makeCompressed();
-
 	return M;
 }

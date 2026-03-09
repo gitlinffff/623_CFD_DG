@@ -1,3 +1,4 @@
+cmake_policy(SET CMP0077 NEW)
 cmake_minimum_required(VERSION 3.14) # FetchContent works best with 3.14+
 project(flux LANGUAGES C CXX)         # Enable C for quad2d.c and shape.c
 
@@ -12,7 +13,7 @@ include(cmake/eigen.cmake)
 
 # --- 2. Existing Libraries ---
 add_library(flux_physics flux.cpp physics.cpp)
-target_include_directories(flux_physics PUBLIC ${CMAKE_SOURCE_DIR})
+target_include_directories(flux_physics PUBLIC ${CMAKE_SOURCE_DIR} ${EIGEN_INCLUDE_DIR})
 
 add_library(mesh_io readgri.cpp)
 target_include_directories(mesh_io PUBLIC ${CMAKE_SOURCE_DIR})

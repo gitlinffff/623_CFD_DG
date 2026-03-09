@@ -1,6 +1,8 @@
 #ifndef PHYSICS_HPP
 #define PHYSICS_HPP
 
+#include <Eigen/Dense>
+
 /** U = [rho, rho*u, rho*v, E], p = (g-1)*(E - rho*(u^2+v^2)/2), c = sqrt(g*p/rho) */
 void consToPrim(const double U[4], double gammad,
                   double& rho, double& u, double& v, double& p, double& c);
@@ -28,6 +30,6 @@ double total_pressure(double rho, double u, double v, double p, double gammad);
 /** F·n: [rho*un, rho*u*un+p*nx, rho*v*un+p*ny, (E+p)*un], un = u·n */
 void physicalFlux(const double U[4], const double n[2], double gammad, double Fout[4]);
 
-Eigen::Matrix<double, 4, 2> vec_phyFlux(const double U[4], double gammad)
+Eigen::Matrix<double, 4, 2> vec_phyFlux(const double U[4], double gammad);
 
 #endif
