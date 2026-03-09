@@ -44,3 +44,5 @@ target_link_libraries(main PRIVATE flux_physics mesh_io problem advance dg_utils
 
 # Run target
 add_custom_target(run COMMAND $<TARGET_FILE:main> WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} DEPENDS main)
+
+add_subdirectory(test)
