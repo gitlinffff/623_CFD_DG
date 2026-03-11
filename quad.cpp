@@ -27,6 +27,32 @@ QuadratureRule getQuadratureRule(int order) {
 	}
 }
 
+namespace {
+	// 1D Gauss-Legendre on [0,1] for edge integration (from quad1d.c pattern)
+	// order 0: 1 pt; order 1: 2 pts; order 2: 3 pts; order 3: 4 pts
+	static const int n1d[] = {1, 2, 3, 4};
+	static const double x1d_1[] = {0.5};
+	static const double w1d_1[] = {1.0};
+	static const double x1d_2[] = {0.211324865405187, 0.788675134594813};
+	static const double w1d_2[] = {0.5, 0.5};
+	static const double x1d_3[] = {0.112701665379258, 0.5, 0.887298334620742};
+	static const double w1d_3[] = {0.277777777777778, 0.444444444444444, 0.277777777777778};
+	static const double x1d_4[] = {0.069431844202974, 0.330009478207572, 0.669990521792428, 0.930568155797026};
+	static const double w1d_4[] = {0.173927422568727, 0.326072577431273, 0.326072577431273, 0.173927422568727};
+}
+
+QuadratureRule getQuadratureRule1D(int order) {
+	if (order < 0 || order > 3)
+		throw std::runtime_error("Unsupported 1D quadrature order: " + std::to_string(order));
+	switch (order) {
+		case 0: return {n1d[0], x1d_1, w1d_1};
+		case 1: return {n1d[1], x1d_2, w1d_2};
+		case 2: return {n1d[2], x1d_3, w1d_3};
+		case 3: return {n1d[3], x1d_4, w1d_4};
+		default: return {n1d[0], x1d_1, w1d_1};
+	}
+}
+
 /* get phi, dPhi/dXi, dPhi/dEta, wq at all quad points for all basis functions*/
 std::vector<BasisEval> computePhiQ(int order) {
 	int Np = (order + 1) * (order + 2) / 2;
