@@ -12,21 +12,35 @@ extern "C" {
 
 namespace {
 
-/** Reference (xi, eta) on face f at 1D param t in [0,1]. Face f opposite node f. */
+/**
+ * Reference (xi, eta) on face j at 1D param t in [0,1].
+ *
+ * Convention matches readgri.cpp: face j is the edge from local node j
+ * to local node (j+1)%3.  Reference nodes: 0=(0,0), 1=(1,0), 2=(0,1).
+ *
+ *   face 0: (0,0) -> (1,0)   node0 to node1   xi = t,     eta = 0
+ *   face 1: (1,0) -> (0,1)   node1 to node2   xi = 1-t,   eta = t
+ *   face 2: (0,1) -> (0,0)   node2 to node0   xi = 0,     eta = 1-t
+ */
 void faceRefCoords(int face, double t, double& xi, double& eta) {
 	switch (face) {
-		case 0: xi = 1.0 - t; eta = t; break;  /* edge (1,0)-(0,1) */
-		case 1: xi = 0.0;       eta = t; break;  /* edge (0,0)-(0,1) */
-		case 2: xi = t;         eta = 0.0; break;  /* edge (0,0)-(1,0) */
-		default: xi = t; eta = 0.0; break;
+		case 0: xi = t;       eta = 0.0;     break;  /* node0=(0,0) -> node1=(1,0) */
+		case 1: xi = 1.0-t;   eta = t;       break;  /* node1=(1,0) -> node2=(0,1) */
+		case 2: xi = 0.0;     eta = 1.0-t;   break;  /* node2=(0,1) -> node0=(0,0) */
+		default: xi = t;      eta = 0.0;     break;
 	}
 }
 
-/** Physical (x,y) on face f of element k at param t. */
+/**
+ * Physical (x,y) on face j of element k at param t in [0,1].
+ *
+ * Convention matches readgri.cpp and faceRefCoords above:
+ * face j goes from physical node j to physical node (j+1)%3.
+ */
 void facePhysCoords(const GriMesh& mesh, int k, int face, double t,
                    double& x, double& y) {
-	int v0 = mesh.E[k * 3 + (face + 1) % 3];
-	int v1 = mesh.E[k * 3 + (face + 2) % 3];
+	int v0 = mesh.E[k * 3 + face];
+	int v1 = mesh.E[k * 3 + (face + 1) % 3];
 	double x0 = mesh.V[v0 * 2 + 0], y0 = mesh.V[v0 * 2 + 1];
 	double x1 = mesh.V[v1 * 2 + 0], y1 = mesh.V[v1 * 2 + 1];
 	x = x0 + t * (x1 - x0);
@@ -76,9 +90,19 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 			double x_phys, y_phys;
 			facePhysCoords(mesh, elemL, faceL, t, x_phys, y_phys);
 
-			/* Ref coords for elemR (same physical point) */
+			/* Ref coords for elemR.
+			 * For regular interior faces physToRef maps the shared physical
+			 * point back into elemR's reference domain.
+			 * For PERIODIC faces the physical point on elemL's side is NOT
+			 * inside elemR's physical domain, so physToRef produces wildly
+			 * out-of-range coordinates; in that case fall back to the direct
+			 * parametric mapping faceRefCoords(faceR, t). */
 			double xiR, etaR;
 			physToRef(mesh, elemR, x_phys, y_phys, xiR, etaR);
+			if (xiR < -0.1 || etaR < -0.1 || xiR + etaR > 1.1) {
+				/* Periodic face: use local face parametrisation of elemR. */
+				faceRefCoords(faceR, t, xiR, etaR);
+			}
 
 			/* Interpolate UL at (xiL, etaL) */
 			double xrefL[2] = {xiL, etaL};

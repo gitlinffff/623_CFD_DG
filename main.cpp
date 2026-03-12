@@ -1,11 +1,10 @@
 /**
  * DG solver main for the turbine blade passage.
  *
- * Usage: build with 'make' from the project root, run with 'make run'.
- *
- * Edit the three parameters below to change the case:
- *   order    : DG polynomial order (0 = FV-equivalent, 1, 2, 3)
- *   gri_file : path to .gri mesh file (relative to project root)
+ * Edit the case parameters below and rebuild:
+ *   order    : DG polynomial order (0, 1, 2, 3)
+ *   CFL      : CFL number (recommend 0.4 for all orders)
+ *   gri_file : path to .gri mesh file
  */
 #include "advance.hpp"
 #include "readgri.hpp"
@@ -15,7 +14,6 @@
 #include <string>
 #include <vector>
 
-/* Extract the stem of a file path (no directory prefix, no extension). */
 static std::string stem(const std::string& path)
 {
     size_t slash = path.find_last_of("/\\");
@@ -27,9 +25,11 @@ static std::string stem(const std::string& path)
 int main()
 {
     /* ---- Case parameters ---- */
-    const int    order    = 0;
+    const int    order    = 1;
     const double CFL      = 0.4;
     const char*  gri_file = "mesh/global_refine_0.gri";
+    const int    max_iter = 100000;
+    const int    print_interval = 200;
 
     /* ---- Load mesh ---- */
     GriMesh mesh;
@@ -38,23 +38,28 @@ int main()
         return 1;
     }
     std::cout << "Mesh: " << gri_file
-              << "  (" << mesh.Ne << " elements, "
-              << mesh.num_interior_faces << " interior faces)\n";
+              << "  Ne=" << mesh.Ne
+              << "  Nf_int=" << mesh.num_interior_faces
+              << "  Nf_bnd=" << mesh.num_boundary_faces << "\n";
+    std::cout << "Order p=" << order << "  CFL=" << CFL << "\n";
 
-    /* ---- Initialise solution ---- */
+    /* ---- Initialize solution to uniform freestream ---- */
     ProblemParams params;
+    FluxFn flux_fn = fluxROE;
+
     const int Np = (order + 1) * (order + 2) / 2;
     std::vector<double> U(4 * mesh.Ne * Np, 0.0);
     initialize_uniform(U.data(), mesh.Ne, order, params);
 
-    /* ---- Steady solve ---- */
-    FluxFn flux_fn = fluxROE;
-    solve_steady(mesh, U.data(), order, params, flux_fn, CFL, /*print_interval=*/50, /*max_iter=*/100000);
+    /* ---- Solve to steady state ---- */
+    solve_steady(mesh, U.data(), order, params, flux_fn,
+                 CFL, print_interval, max_iter);
 
     /* ---- Write converged solution to ParaView VTU ---- */
     std::string case_name = stem(gri_file) + "_p" + std::to_string(order);
     std::string outpath   = "results/steady/" + case_name + "/solution.vtu";
     write_solution_vtu(mesh, U.data(), order, params, outpath);
+    std::cout << "Solution written to: " << outpath << "\n";
 
     return 0;
 }
