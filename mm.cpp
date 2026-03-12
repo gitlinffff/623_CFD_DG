@@ -1,4 +1,5 @@
 #include "mm.hpp"
+#include <cmath>
 #include <stdexcept>
 
 extern "C" {
@@ -84,4 +85,35 @@ Eigen::SparseMatrix<double> computeGlobalMassMatrix(const GriMesh& mesh, int ord
 	M.setFromTriplets(tripletList.begin(), tripletList.end());
 	M.makeCompressed();
 	return M;
+}
+
+void applyInverseMassMatrix(const GriMesh& mesh, double* R, int order) {
+	int Np = (order + 1) * (order + 2) / 2;
+
+	// M_ref is identical for every element (same reference triangle), so cache it.
+	static Eigen::MatrixXd M_ref_inv_cache;
+	static int cached_order = -1;
+	if (cached_order != order) {
+		M_ref_inv_cache = computeRefMassMatrix(order).inverse();
+		cached_order = order;
+	}
+	const Eigen::MatrixXd& Minv = M_ref_inv_cache;
+
+	Eigen::VectorXd R_elem(Np);
+	for (int k = 0; k < mesh.Ne; ++k) {
+		// M_k = detJ * M_ref  =>  M_k^{-1} = (1/detJ) * M_ref^{-1}
+		Eigen::Matrix2d J = Jacobian(mesh, k);
+		double detJ = std::abs(J.determinant());
+		if (detJ < 1e-30) detJ = 1e-30;
+		double inv_detJ = 1.0 / detJ;
+
+		for (int var = 0; var < 4; ++var) {
+			int base = (var * mesh.Ne + k) * Np;
+			for (int i = 0; i < Np; ++i)
+				R_elem(i) = R[base + i];
+			Eigen::VectorXd R_new = inv_detJ * Minv * R_elem;
+			for (int i = 0; i < Np; ++i)
+				R[base + i] = R_new(i);
+		}
+	}
 }

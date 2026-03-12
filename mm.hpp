@@ -23,4 +23,20 @@ Eigen::MatrixXd computeRefMassMatrix(int order);
  */
 Eigen::SparseMatrix<double> computeGlobalMassMatrix(const GriMesh& mesh, int order);
 
+/**
+ * Apply the block-diagonal mass matrix inverse in-place to a DG residual vector R.
+ *
+ * The DG time equation is  M * dU/dt = -R  (R = raw residual from calcRes).
+ * The correct time update is therefore  U_new = U - dt * M^{-1} * R.
+ * This function overwrites R with  M^{-1} * R  so that the caller can write
+ *   U -= dt * R  directly.
+ *
+ * For a linear (affine) element:  M_k = det(J_k) * M_ref
+ * so  M_k^{-1} = (1/det(J_k)) * M_ref^{-1}.
+ * M_ref^{-1} is the same for every element and is cached after the first call.
+ *
+ * R layout: [var * Ne * Np + elem * Np + basis]
+ */
+void applyInverseMassMatrix(const GriMesh& mesh, double* R, int order);
+
 #endif

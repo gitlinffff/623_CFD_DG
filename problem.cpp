@@ -25,11 +25,13 @@ double getp0(const ProblemParams& p) {
 }
 
 
-void initialize_uniform(double* U, int Ne, int order, double M, const ProblemParams& params) {
+void initialize_uniform(double* U, int Ne, int order, const ProblemParams& params) {
+	const double Mach = 0.1;  // freestream Mach number used for steady initialization
+
 	int Np = (order + 1) * (order + 2) / 2;
 	double rho, u, v, p;
 	double p0 = getp0(params.rho0, params.a0, params.gammad);
-	isentropic_prim_from_M(params.rho0, p0, params.gammad, M, params.alpha,
+	isentropic_prim_from_M(params.rho0, p0, params.gammad, Mach, params.alpha,
 												 rho, u, v, p);
 
 	// Convert to conserved variables
