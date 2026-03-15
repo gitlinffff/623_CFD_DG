@@ -17,7 +17,8 @@ typedef void (*FluxFn)(const double*, const double*, const double*, double, doub
  * Boundary faces are not handled (leave empty as requested).
  */
 void addSurfTerm(const GriMesh& mesh, double* R, int order,
-                const double* U, const ProblemParams& params, FluxFn flux_fn);
+                const double* U, const ProblemParams& params, FluxFn flux_fn,
+								std::vector<double>& sum_s);
 
 /**
  * Computes the surface flux integral term over boundary faces for the DG residual.
@@ -27,6 +28,7 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
  * discrete steady state when combined with the volume term.
  */
 void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
-                    const double* U, const ProblemParams& params, FluxFn flux_fn);
+                    const double* U, const ProblemParams& params, FluxFn flux_fn,
+										std::vector<double>& sum_s);
 
 #endif // SURF_HPP

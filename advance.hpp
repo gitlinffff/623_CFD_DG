@@ -23,11 +23,15 @@ typedef void (*FluxFn)(const double*, const double*, const double*, double, doub
  * so that the DG solver sees the same geometry and BCs as the old FV solver.
  */
 void calcRes(const GriMesh& mesh,
-               const double* U,
-               double* R,
-               int order,
-               const ProblemParams& params,
-               FluxFn flux_fn);
+             const double* U,
+             double* R,
+             int order,
+             const ProblemParams& params,
+             FluxFn flux_fn,
+             double CFL,
+             double* dt_local, // Size: mesh.Ne
+             double& dt_global);
+
 
 /** L1 norm of DG residual over all variables/elements/basis functions. */
 double residual_L1_norm(const GriMesh& mesh,
@@ -40,13 +44,14 @@ double residual_L1_norm(const GriMesh& mesh,
  * Marches in pseudo-time until the L1 norm of the residual drops 5 orders
  * of magnitude relative to the initial value, mirroring the FV solver logic.
  */
-void solve_steady(const GriMesh& mesh,
+void solve(const GriMesh& mesh,
                   double* U,
                   int order,
                   const ProblemParams& params,
                   FluxFn flux_fn,
                   double CFL = 0.5,
                   int residual_stride = 50,
-                  int max_iter = 1000000);
+                  int max_iter = 1000000,
+									bool use_local_dt = false);
 
 #endif

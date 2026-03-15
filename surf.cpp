@@ -63,7 +63,8 @@ void physToRef(const GriMesh& mesh, int k, double x, double y,
 } // namespace
 
 void addSurfTerm(const GriMesh& mesh, double* R, int order,
-                const double* U, const ProblemParams& params, FluxFn flux_fn) {
+                const double* U, const ProblemParams& params, FluxFn flux_fn,
+                std::vector<double>& sum_s) {
 	int Np = (order + 1) * (order + 2) / 2;
 	QuadratureRule quad1d = getQuadratureRule1D(order);
 
@@ -76,6 +77,7 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 		int faceR = mesh.I2E[4 * iface + 3];
 
 		const double* n = &mesh.In[2 * iface];
+		double max_smag_edge = 0.0;
 		double L = mesh.In_len[iface];
 
 		for (int q = 0; q < quad1d.nq; ++q) {
@@ -123,9 +125,9 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 			}
 
 			/* Numerical flux Fhat(UL, UR, n) */
-			double Fhat[4];
-			double smag;
-			flux_fn(UL, UR, n, params.gammad, Fhat, smag);
+			double Fhat[4], smag_q;
+			flux_fn(UL, UR, n, params.gammad, Fhat, smag_q);
+			max_smag_edge = std::max(max_smag_edge, smag_q);
 
 			/* phi_i at (xiL, etaL) for elemL; add phi_i * Fhat * w to R */
 			shapeL(xrefL, order, &phi);
@@ -143,8 +145,9 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 					R[(var * mesh.Ne + elemR) * Np + i] -= phi_i * Fhat[var] * w;
 			}
 		}
+		sum_s[elemL] += max_smag_edge * L;
+		sum_s[elemR] += max_smag_edge * L;
 	}
-
 	if (phi) free(phi);
 }
 
@@ -194,7 +197,8 @@ static DGBcType classify_boundary_name(const std::string& name_raw) {
 } // namespace
 
 void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
-                    const double* U, const ProblemParams& params, FluxFn flux_fn) {
+                    const double* U, const ProblemParams& params, FluxFn flux_fn,
+										std::vector<double>& sum_s) {
 	int Np = (order + 1) * (order + 2) / 2;
 	QuadratureRule quad1d = getQuadratureRule1D(order);
 
@@ -209,6 +213,7 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 		int bgroup = mesh.B2E[3 * ib + 2]; // 1-based into mesh.Bname
 		const double* n = &mesh.Bn[2 * ib];
 		double L = mesh.Bn_len[ib];
+		double max_smag_edge = 0.0;
 
 		std::string bname = "unknown";
 		if (bgroup >= 1 && (size_t)bgroup <= mesh.Bname.size())
@@ -231,27 +236,27 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 					UL[var] += U[var * mesh.Ne * Np + elem * Np + j] * phi[j];
 			}
 
-			double Fhat[4];
-			double smag;
+			double Fhat[4], smag_q;
 			if (bctype == DGBcType::WALL) {
-				WallFlux(UL, n, params.gammad, Fhat, smag);
+				WallFlux(UL, n, params.gammad, Fhat, smag_q);
 			} else if (bctype == DGBcType::INFLOW) {
 				try {
-					InflowFlux(UL, n, nin, params.rho0, params.a0, params.gammad, R_gas, flux_fn, Fhat, smag);
+					InflowFlux(UL, n, nin, params.rho0, params.a0, params.gammad, R_gas, flux_fn, Fhat, smag_q);
 				} catch (const std::exception&) {
 					// Interior state is unphysical during early iteration; use zero-dissipation fallback.
-					flux_fn(UL, UL, n, params.gammad, Fhat, smag);
+					flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
 				}
 			} else if (bctype == DGBcType::OUTFLOW) {
 				try {
-					OutflowFlux(UL, n, params.pout, params.gammad, flux_fn, Fhat, smag);
+					OutflowFlux(UL, n, params.pout, params.gammad, flux_fn, Fhat, smag_q);
 				} catch (const std::exception&) {
-					flux_fn(UL, UL, n, params.gammad, Fhat, smag);
+					flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
 				}
 			} else {
 				// Freestream test behavior: ghost state equals interior state.
-				flux_fn(UL, UL, n, params.gammad, Fhat, smag);
+				flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
 			}
+			max_smag_edge = std::max(max_smag_edge, smag_q);
 
 			// Add boundary contribution to residual.
 			shapeL(xref, order, &phi);
@@ -261,7 +266,7 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 					R[(var * mesh.Ne + elem) * Np + i] += phi_i * Fhat[var] * w;
 			}
 		}
+		sum_s[elem] += max_smag_edge * L;
 	}
-
 	if (phi) free(phi);
 }

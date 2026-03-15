@@ -26,7 +26,7 @@ int main()
 {
     /* ---- Case parameters ---- */
     const int    order    = 1;
-    const double CFL      = 0.4;
+    const double CFL      = 0.2;
     const char*  gri_file = "mesh/global_refine_0.gri";
     const int    max_iter = 100000;
     const int    print_interval = 200;
@@ -52,8 +52,8 @@ int main()
     initialize_uniform(U.data(), mesh.Ne, order, params);
 
     /* ---- Solve to steady state ---- */
-    solve_steady(mesh, U.data(), order, params, flux_fn,
-                 CFL, print_interval, max_iter);
+    solve(mesh, U.data(), order, params, flux_fn,
+                 CFL, print_interval, max_iter, true);
 
     /* ---- Write converged solution to ParaView VTU ---- */
     std::string case_name = stem(gri_file) + "_p" + std::to_string(order);
