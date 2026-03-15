@@ -99,7 +99,8 @@ void applyInverseMassMatrix(const GriMesh& mesh, double* R, int order) {
 	}
 	const Eigen::MatrixXd& Minv = M_ref_inv_cache;
 
-	Eigen::VectorXd R_elem(Np);
+	// Each element k reads/writes its own slice of R: no race conditions.
+	#pragma omp parallel for schedule(static)
 	for (int k = 0; k < mesh.Ne; ++k) {
 		// M_k = detJ * M_ref  =>  M_k^{-1} = (1/detJ) * M_ref^{-1}
 		Eigen::Matrix2d J = Jacobian(mesh, k);
@@ -107,6 +108,7 @@ void applyInverseMassMatrix(const GriMesh& mesh, double* R, int order) {
 		if (detJ < 1e-30) detJ = 1e-30;
 		double inv_detJ = 1.0 / detJ;
 
+		Eigen::VectorXd R_elem(Np); // thread-private temporary
 		for (int var = 0; var < 4; ++var) {
 			int base = (var * mesh.Ne + k) * Np;
 			for (int i = 0; i < Np; ++i)

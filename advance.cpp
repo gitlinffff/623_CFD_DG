@@ -47,6 +47,7 @@ void calcRes(const GriMesh& mesh,
 
 	// Calculate dt_local and dt_global
 	dt_global = 1.e20; // Initialize with large value
+	#pragma omp parallel for schedule(static) reduction(min:dt_global)
 	for (int k = 0; k < mesh.Ne; ++k) {
 		double Ak = mesh.Area[k];
 
@@ -72,6 +73,7 @@ double residual_L1_norm(const GriMesh& mesh,
     const int Np = (order + 1) * (order + 2) / 2;
     const int nTot = 4 * mesh.Ne * Np;
     double sum = 0.0;
+    #pragma omp parallel for schedule(static) reduction(+:sum)
     for (int i = 0; i < nTot; ++i)
         sum += std::fabs(R[i]);
     return sum;
@@ -117,6 +119,7 @@ void solve(const GriMesh& mesh,
             return use_local_dt ? dt_local[k] : dt_global;
         };
 
+        #pragma omp parallel for schedule(static)
         for (int k = 0; k < mesh.Ne; ++k) {
             double dtk = get_dt(k);
             for (int var = 0; var < 4; ++var) {
@@ -129,6 +132,7 @@ void solve(const GriMesh& mesh,
         // stage 2: U2_k = 0.75 U_k + 0.25 (U1_k - dt_k * M_k^{-1} R1_k)
         calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
         applyInverseMassMatrix(mesh, R.data(), order);
+        #pragma omp parallel for schedule(static)
         for (int k = 0; k < mesh.Ne; ++k) {
             double dtk = get_dt(k);
             for (int var = 0; var < 4; ++var) {
@@ -141,6 +145,7 @@ void solve(const GriMesh& mesh,
         // stage 3: U_k = 1/3 U_k + 2/3 (U2_k - dt_k * M_k^{-1} R2_k)
         calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
         applyInverseMassMatrix(mesh, R.data(), order);
+        #pragma omp parallel for schedule(static)
         for (int k = 0; k < mesh.Ne; ++k) {
             double dtk = get_dt(k);
             for (int var = 0; var < 4; ++var) {

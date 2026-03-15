@@ -25,10 +25,10 @@ static std::string stem(const std::string& path)
 int main()
 {
     /* ---- Case parameters ---- */
-    const int    order    = 1;
-    const double CFL      = 0.1;
-    const char*  gri_file = "mesh/global_refine_0.gri";
-    const int    max_iter = 100000;
+    const int    order    = 0;
+    const double CFL      = 0.8;
+    const char*  gri_file = "mesh/global_refine_1.gri";
+    const int    max_iter = 1000000;
     const int    print_interval = 200;
 
     /* ---- Load mesh ---- */
@@ -45,7 +45,7 @@ int main()
 
     /* ---- Initialize solution to uniform freestream ---- */
     ProblemParams params;
-    FluxFn flux_fn = fluxROE;
+    FluxFn flux_fn = fluxHLLE;
 
     const int Np = (order + 1) * (order + 2) / 2;
     std::vector<double> U(4 * mesh.Ne * Np, 0.0);
@@ -53,7 +53,7 @@ int main()
 
     /* ---- Solve to steady state ---- */
     solve(mesh, U.data(), order, params, flux_fn,
-                 CFL, print_interval, max_iter, true);
+                 CFL, print_interval, max_iter, false);
 
     /* ---- Write converged solution to ParaView VTU ---- */
     std::string case_name = stem(gri_file) + "_p" + std::to_string(order);

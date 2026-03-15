@@ -68,87 +68,100 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 	int Np = (order + 1) * (order + 2) / 2;
 	QuadratureRule quad1d = getQuadratureRule1D(order);
 
-	double* phi = nullptr;
+	// Different faces may share the same element, so R and sum_s updates use
+	// atomic operations. Each thread owns its own phi buffer for shapeL.
+	#pragma omp parallel
+	{
+		double* phi = nullptr;
 
-	for (int iface = 0; iface < mesh.num_interior_faces; ++iface) {
-		int elemL = mesh.I2E[4 * iface + 0];
-		int faceL = mesh.I2E[4 * iface + 1];
-		int elemR = mesh.I2E[4 * iface + 2];
-		int faceR = mesh.I2E[4 * iface + 3];
+		#pragma omp for schedule(static)
+		for (int iface = 0; iface < mesh.num_interior_faces; ++iface) {
+			int elemL = mesh.I2E[4 * iface + 0];
+			int faceL = mesh.I2E[4 * iface + 1];
+			int elemR = mesh.I2E[4 * iface + 2];
+			int faceR = mesh.I2E[4 * iface + 3];
 
-		const double* n = &mesh.In[2 * iface];
-		double max_smag_edge = 0.0;
-		double L = mesh.In_len[iface];
+			const double* n = &mesh.In[2 * iface];
+			double max_smag_edge = 0.0;
+			double L = mesh.In_len[iface];
 
-		for (int q = 0; q < quad1d.nq; ++q) {
-			double t = quad1d.xq[q];
-			double w = quad1d.wq[q] * L;
+			for (int q = 0; q < quad1d.nq; ++q) {
+				double t = quad1d.xq[q];
+				double w = quad1d.wq[q] * L;
 
-			/* Ref coords for elemL on face faceL */
-			double xiL, etaL;
-			faceRefCoords(faceL, t, xiL, etaL);
+				/* Ref coords for elemL on face faceL */
+				double xiL, etaL;
+				faceRefCoords(faceL, t, xiL, etaL);
 
-			/* Physical point */
-			double x_phys, y_phys;
-			facePhysCoords(mesh, elemL, faceL, t, x_phys, y_phys);
+				/* Physical point */
+				double x_phys, y_phys;
+				facePhysCoords(mesh, elemL, faceL, t, x_phys, y_phys);
 
-			/* Ref coords for elemR.
-			 * For regular interior faces physToRef maps the shared physical
-			 * point back into elemR's reference domain.
-			 * For PERIODIC faces the physical point on elemL's side is NOT
-			 * inside elemR's physical domain, so physToRef produces wildly
-			 * out-of-range coordinates; in that case fall back to the direct
-			 * parametric mapping faceRefCoords(faceR, t). */
-			double xiR, etaR;
-			physToRef(mesh, elemR, x_phys, y_phys, xiR, etaR);
-			if (xiR < -0.1 || etaR < -0.1 || xiR + etaR > 1.1) {
-				/* Periodic face: use local face parametrisation of elemR. */
-				faceRefCoords(faceR, t, xiR, etaR);
+				/* Ref coords for elemR.
+				 * For regular interior faces physToRef maps the shared physical
+				 * point back into elemR's reference domain.
+				 * For PERIODIC faces the physical point on elemL's side is NOT
+				 * inside elemR's physical domain, so physToRef produces wildly
+				 * out-of-range coordinates; in that case fall back to the direct
+				 * parametric mapping faceRefCoords(faceR, t). */
+				double xiR, etaR;
+				physToRef(mesh, elemR, x_phys, y_phys, xiR, etaR);
+				if (xiR < -0.1 || etaR < -0.1 || xiR + etaR > 1.1) {
+					/* Periodic face: use local face parametrisation of elemR. */
+					faceRefCoords(faceR, t, xiR, etaR);
+				}
+
+				/* Interpolate UL at (xiL, etaL) */
+				double xrefL[2] = {xiL, etaL};
+				shapeL(xrefL, order, &phi);
+				double UL[4] = {0, 0, 0, 0};
+				for (int j = 0; j < Np; ++j) {
+					for (int var = 0; var < 4; ++var)
+						UL[var] += U[var * mesh.Ne * Np + elemL * Np + j] * phi[j];
+				}
+
+				/* Interpolate UR at (xiR, etaR) */
+				double xrefR[2] = {xiR, etaR};
+				shapeL(xrefR, order, &phi);
+				double UR[4] = {0, 0, 0, 0};
+				for (int j = 0; j < Np; ++j) {
+					for (int var = 0; var < 4; ++var)
+						UR[var] += U[var * mesh.Ne * Np + elemR * Np + j] * phi[j];
+				}
+
+				/* Numerical flux Fhat(UL, UR, n) */
+				double Fhat[4], smag_q;
+				flux_fn(UL, UR, n, params.gammad, Fhat, smag_q);
+				max_smag_edge = std::max(max_smag_edge, smag_q);
+
+				/* phi_i at (xiL, etaL) for elemL; add phi_i * Fhat * w to R */
+				shapeL(xrefL, order, &phi);
+				for (int i = 0; i < Np; ++i) {
+					double phi_i = phi[i];
+					for (int var = 0; var < 4; ++var) {
+						#pragma omp atomic
+						R[(var * mesh.Ne + elemL) * Np + i] += phi_i * Fhat[var] * w;
+					}
+				}
+
+				/* phi_i at (xiR, etaR) for elemR; subtract phi_i * Fhat * w (Fhat(UR,UL,-n) = -Fhat) */
+				shapeL(xrefR, order, &phi);
+				for (int i = 0; i < Np; ++i) {
+					double phi_i = phi[i];
+					for (int var = 0; var < 4; ++var) {
+						#pragma omp atomic
+						R[(var * mesh.Ne + elemR) * Np + i] -= phi_i * Fhat[var] * w;
+					}
+				}
 			}
-
-			/* Interpolate UL at (xiL, etaL) */
-			double xrefL[2] = {xiL, etaL};
-			shapeL(xrefL, order, &phi);
-			double UL[4] = {0, 0, 0, 0};
-			for (int j = 0; j < Np; ++j) {
-				for (int var = 0; var < 4; ++var)
-					UL[var] += U[var * mesh.Ne * Np + elemL * Np + j] * phi[j];
-			}
-
-			/* Interpolate UR at (xiR, etaR) */
-			double xrefR[2] = {xiR, etaR};
-			shapeL(xrefR, order, &phi);
-			double UR[4] = {0, 0, 0, 0};
-			for (int j = 0; j < Np; ++j) {
-				for (int var = 0; var < 4; ++var)
-					UR[var] += U[var * mesh.Ne * Np + elemR * Np + j] * phi[j];
-			}
-
-			/* Numerical flux Fhat(UL, UR, n) */
-			double Fhat[4], smag_q;
-			flux_fn(UL, UR, n, params.gammad, Fhat, smag_q);
-			max_smag_edge = std::max(max_smag_edge, smag_q);
-
-			/* phi_i at (xiL, etaL) for elemL; add phi_i * Fhat * w to R */
-			shapeL(xrefL, order, &phi);
-			for (int i = 0; i < Np; ++i) {
-				double phi_i = phi[i];
-				for (int var = 0; var < 4; ++var)
-					R[(var * mesh.Ne + elemL) * Np + i] += phi_i * Fhat[var] * w;
-			}
-
-			/* phi_i at (xiR, etaR) for elemR; subtract phi_i * Fhat * w (Fhat(UR,UL,-n) = -Fhat) */
-			shapeL(xrefR, order, &phi);
-			for (int i = 0; i < Np; ++i) {
-				double phi_i = phi[i];
-				for (int var = 0; var < 4; ++var)
-					R[(var * mesh.Ne + elemR) * Np + i] -= phi_i * Fhat[var] * w;
-			}
+			#pragma omp atomic
+			sum_s[elemL] += max_smag_edge * L;
+			#pragma omp atomic
+			sum_s[elemR] += max_smag_edge * L;
 		}
-		sum_s[elemL] += max_smag_edge * L;
-		sum_s[elemR] += max_smag_edge * L;
-	}
-	if (phi) free(phi);
+
+		if (phi) free(phi);
+	} // end omp parallel
 }
 
 // Freestream-only boundary contribution using ghost = interior state (not full BC implementation).
@@ -202,71 +215,81 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 	int Np = (order + 1) * (order + 2) / 2;
 	QuadratureRule quad1d = getQuadratureRule1D(order);
 
-	double* phi = nullptr;
-
 	const double nin[2] = {std::cos(params.alpha), std::sin(params.alpha)};
 	const double R_gas = 1.0 / params.gammad;
 
-	for (int ib = 0; ib < mesh.num_boundary_faces; ++ib) {
-		int elem = mesh.B2E[3 * ib + 0];
-		int face = mesh.B2E[3 * ib + 1];
-		int bgroup = mesh.B2E[3 * ib + 2]; // 1-based into mesh.Bname
-		const double* n = &mesh.Bn[2 * ib];
-		double L = mesh.Bn_len[ib];
-		double max_smag_edge = 0.0;
+	// Different boundary faces can belong to the same element, so R and sum_s
+	// updates use atomic operations. Each thread owns its own phi buffer.
+	#pragma omp parallel
+	{
+		double* phi = nullptr;
 
-		std::string bname = "unknown";
-		if (bgroup >= 1 && (size_t)bgroup <= mesh.Bname.size())
-			bname = mesh.Bname[(size_t)bgroup - 1];
-		DGBcType bctype = classify_boundary_name(bname);
+		#pragma omp for schedule(static)
+		for (int ib = 0; ib < mesh.num_boundary_faces; ++ib) {
+			int elem = mesh.B2E[3 * ib + 0];
+			int face = mesh.B2E[3 * ib + 1];
+			int bgroup = mesh.B2E[3 * ib + 2]; // 1-based into mesh.Bname
+			const double* n = &mesh.Bn[2 * ib];
+			double L = mesh.Bn_len[ib];
+			double max_smag_edge = 0.0;
 
-		for (int q = 0; q < quad1d.nq; ++q) {
-			double t = quad1d.xq[q];
-			double w = quad1d.wq[q] * L;
+			std::string bname = "unknown";
+			if (bgroup >= 1 && (size_t)bgroup <= mesh.Bname.size())
+				bname = mesh.Bname[(size_t)bgroup - 1];
+			DGBcType bctype = classify_boundary_name(bname);
 
-			double xi, eta;
-			faceRefCoords(face, t, xi, eta);
-			double xref[2] = {xi, eta};
+			for (int q = 0; q < quad1d.nq; ++q) {
+				double t = quad1d.xq[q];
+				double w = quad1d.wq[q] * L;
 
-			// Interpolate UL at (xi, eta)
-			shapeL(xref, order, &phi);
-			double UL[4] = {0, 0, 0, 0};
-			for (int j = 0; j < Np; ++j) {
-				for (int var = 0; var < 4; ++var)
-					UL[var] += U[var * mesh.Ne * Np + elem * Np + j] * phi[j];
-			}
+				double xi, eta;
+				faceRefCoords(face, t, xi, eta);
+				double xref[2] = {xi, eta};
 
-			double Fhat[4], smag_q;
-			if (bctype == DGBcType::WALL) {
-				WallFlux(UL, n, params.gammad, Fhat, smag_q);
-			} else if (bctype == DGBcType::INFLOW) {
-				try {
-					InflowFlux(UL, n, nin, params.rho0, params.a0, params.gammad, R_gas, flux_fn, Fhat, smag_q);
-				} catch (const std::exception&) {
-					// Interior state is unphysical during early iteration; use zero-dissipation fallback.
+				// Interpolate UL at (xi, eta)
+				shapeL(xref, order, &phi);
+				double UL[4] = {0, 0, 0, 0};
+				for (int j = 0; j < Np; ++j) {
+					for (int var = 0; var < 4; ++var)
+						UL[var] += U[var * mesh.Ne * Np + elem * Np + j] * phi[j];
+				}
+
+				double Fhat[4], smag_q;
+				if (bctype == DGBcType::WALL) {
+					WallFlux(UL, n, params.gammad, Fhat, smag_q);
+				} else if (bctype == DGBcType::INFLOW) {
+					try {
+						InflowFlux(UL, n, nin, params.rho0, params.a0, params.gammad, R_gas, flux_fn, Fhat, smag_q);
+					} catch (const std::exception&) {
+						// Interior state is unphysical during early iteration; use zero-dissipation fallback.
+						flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
+					}
+				} else if (bctype == DGBcType::OUTFLOW) {
+					try {
+						OutflowFlux(UL, n, params.pout, params.gammad, flux_fn, Fhat, smag_q);
+					} catch (const std::exception&) {
+						flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
+					}
+				} else {
+					// Freestream test behavior: ghost state equals interior state.
 					flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
 				}
-			} else if (bctype == DGBcType::OUTFLOW) {
-				try {
-					OutflowFlux(UL, n, params.pout, params.gammad, flux_fn, Fhat, smag_q);
-				} catch (const std::exception&) {
-					flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
-				}
-			} else {
-				// Freestream test behavior: ghost state equals interior state.
-				flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
-			}
-			max_smag_edge = std::max(max_smag_edge, smag_q);
+				max_smag_edge = std::max(max_smag_edge, smag_q);
 
-			// Add boundary contribution to residual.
-			shapeL(xref, order, &phi);
-			for (int i = 0; i < Np; ++i) {
-				double phi_i = phi[i];
-				for (int var = 0; var < 4; ++var)
-					R[(var * mesh.Ne + elem) * Np + i] += phi_i * Fhat[var] * w;
+				// Add boundary contribution to residual.
+				shapeL(xref, order, &phi);
+				for (int i = 0; i < Np; ++i) {
+					double phi_i = phi[i];
+					for (int var = 0; var < 4; ++var) {
+						#pragma omp atomic
+						R[(var * mesh.Ne + elem) * Np + i] += phi_i * Fhat[var] * w;
+					}
+				}
 			}
+			#pragma omp atomic
+			sum_s[elem] += max_smag_edge * L;
 		}
-		sum_s[elem] += max_smag_edge * L;
-	}
-	if (phi) free(phi);
+
+		if (phi) free(phi);
+	} // end omp parallel
 }

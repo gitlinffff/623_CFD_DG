@@ -12,6 +12,30 @@ endif()
 # --- Dependencies ---
 include(cmake/eigen.cmake)
 
+# --- OpenMP ---
+# Apple Clang does not bundle OpenMP; point CMake at the Homebrew libomp package.
+if(APPLE)
+  set(OpenMP_C_FLAGS          "-Xpreprocessor -fopenmp")
+  set(OpenMP_C_LIB_NAMES      "omp")
+  set(OpenMP_CXX_FLAGS        "-Xpreprocessor -fopenmp")
+  set(OpenMP_CXX_LIB_NAMES    "omp")
+  # Prefer the Homebrew arm64 prefix; fall back to x86_64.
+  foreach(_omp_prefix /opt/homebrew/opt/libomp /usr/local/opt/libomp)
+    if(EXISTS "${_omp_prefix}/lib/libomp.dylib")
+      set(OpenMP_omp_LIBRARY "${_omp_prefix}/lib/libomp.dylib")
+      set(OpenMP_C_INCLUDE_DIR   "${_omp_prefix}/include")
+      set(OpenMP_CXX_INCLUDE_DIR "${_omp_prefix}/include")
+      break()
+    endif()
+  endforeach()
+endif()
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+  message(STATUS "OpenMP found – parallel build enabled.")
+else()
+  message(STATUS "OpenMP NOT found – building single-threaded.")
+endif()
+
 # --- Core physics / mesh libraries ---
 add_library(flux_physics flux.cpp physics.cpp)
 target_include_directories(flux_physics PUBLIC ${CMAKE_SOURCE_DIR} ${EIGEN_INCLUDE_DIR})
@@ -30,11 +54,17 @@ add_library(dg_utils
 )
 target_include_directories(dg_utils PUBLIC ${CMAKE_SOURCE_DIR} ${EIGEN_INCLUDE_DIR})
 target_link_libraries(dg_utils PRIVATE flux_physics mesh_io)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(dg_utils PUBLIC OpenMP::OpenMP_CXX)
+endif()
 
 # --- DG time advance ---
 add_library(advance advance.cpp)
 target_include_directories(advance PUBLIC ${CMAKE_SOURCE_DIR} ${EIGEN_INCLUDE_DIR})
 target_link_libraries(advance PRIVATE flux_physics mesh_io problem dg_utils)
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(advance PUBLIC OpenMP::OpenMP_CXX)
+endif()
 
 # --- Main executable ---
 add_executable(main main.cpp write_vtu.cpp)
