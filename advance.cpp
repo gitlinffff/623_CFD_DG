@@ -77,39 +77,6 @@ double residual_L1_norm(const GriMesh& mesh,
     return sum;
 }
 
-
-static void compute_dt_local(const GriMesh& mesh,
-                              const double* U,
-                              int order,
-                              double gammad,
-                              double CFL,
-                              std::vector<double>& dt_local)
-{
-    const int Np = (order + 1) * (order + 2) / 2;
-    const double safety = 2.0 * order + 1.0;
-
-    dt_local.resize(mesh.Ne);
-    for (int k = 0; k < mesh.Ne; ++k) {
-        double h_k = std::sqrt(mesh.Area[k]);
-
-        double Uk[4];
-        for (int var = 0; var < 4; ++var)
-            Uk[var] = U[var * mesh.Ne * Np + k * Np + 0];
-
-        double rho, u, v, p, c;
-        consToPrim(Uk, gammad, rho, u, v, p, c);
-
-        // Guard against NaN/unphysical states during early iteration
-        if (std::isnan(c) || std::isnan(u) || std::isnan(v) || c < 1e-14) {
-            c = 1.0; u = 0.0; v = 0.0;
-        }
-        double speed = std::sqrt(u * u + v * v) + c;
-        if (speed < 1e-14) speed = 1e-14;
-
-        dt_local[k] = CFL * h_k / (safety * speed);
-    }
-}
-
 void solve(const GriMesh& mesh,
 					 double* U,
 					 int order,

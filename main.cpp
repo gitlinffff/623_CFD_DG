@@ -26,7 +26,7 @@ int main()
 {
     /* ---- Case parameters ---- */
     const int    order    = 1;
-    const double CFL      = 0.2;
+    const double CFL      = 0.1;
     const char*  gri_file = "mesh/global_refine_0.gri";
     const int    max_iter = 100000;
     const int    print_interval = 200;
