@@ -12,7 +12,7 @@ void addTerm2(const GriMesh& mesh, double* R, int order,
 
 	for (int k = 0; k < mesh.Ne; ++k) {
 		Eigen::Matrix2d J = Jacobian(mesh, k);
-		double detJ = J.determinant();
+		double detJ = abs(J.determinant());
 		Eigen::Matrix2d J_inv = J.inverse();
 
 		for (int q = 0; q < quad.nq; ++q) {
