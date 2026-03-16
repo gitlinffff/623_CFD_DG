@@ -10,6 +10,7 @@
 #include "readgri.hpp"
 #include "problem.hpp"
 #include "write_vtu.hpp"
+#include "parseinput.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -22,14 +23,18 @@ static std::string stem(const std::string& path)
     return (dot == std::string::npos) ? base : base.substr(0, dot);
 }
 
-int main()
-{
-    /* ---- Case parameters ---- */
-    const int    order    = 0;
-    const double CFL      = 0.8;
-    const char*  gri_file = "mesh/global_refine_1.gri";
-    const int    max_iter = 1000000;
-    const int    print_interval = 200;
+int main() {
+    InputParams input;
+
+    if (!read_input_file("input.dat", input))
+        return 1;
+
+    const int order = input.order;
+    const double CFL = input.CFL;
+    const char* gri_file = input.gri_file.c_str();
+    const int max_iter = input.max_iter;
+    const int print_interval = input.print_interval;
+    const bool use_local_dt = input.use_local_dt;
 
     /* ---- Load mesh ---- */
     GriMesh mesh;
@@ -41,11 +46,25 @@ int main()
               << "  Ne=" << mesh.Ne
               << "  Nf_int=" << mesh.num_interior_faces
               << "  Nf_bnd=" << mesh.num_boundary_faces << "\n";
-    std::cout << "Order p=" << order << "  CFL=" << CFL << "\n";
+    std::cout << "Order p=" << order
+              << "  CFL=" << CFL
+							<< "  Flux=" << input.flux
+							<< "  local_dt or not = " << use_local_dt << "\n";
 
     /* ---- Initialize solution to uniform freestream ---- */
     ProblemParams params;
-    FluxFn flux_fn = fluxHLLE;
+
+    FluxFn flux_fn;
+    if (input.flux == "HLLE")
+        flux_fn = fluxHLLE;
+    else if (input.flux == "Roe")
+        flux_fn = fluxROE;
+    else if (input.flux == "Rusanov")
+        flux_fn = fluxRusanov;
+    else {
+        std::cerr << "Unknown flux type\n";
+        return 1;
+    }
 
     const int Np = (order + 1) * (order + 2) / 2;
     std::vector<double> U(4 * mesh.Ne * Np, 0.0);
@@ -53,7 +72,7 @@ int main()
 
     /* ---- Solve to steady state ---- */
     solve(mesh, U.data(), order, params, flux_fn,
-                 CFL, print_interval, max_iter, false);
+                 CFL, print_interval, max_iter, use_local_dt);
 
     /* ---- Write converged solution to ParaView VTU ---- */
     std::string case_name = stem(gri_file) + "_p" + std::to_string(order);

@@ -67,7 +67,7 @@ if(OpenMP_CXX_FOUND)
 endif()
 
 # --- Main executable ---
-add_executable(main main.cpp write_vtu.cpp)
+add_executable(main main.cpp write_vtu.cpp parseinput.cpp)
 target_include_directories(main PRIVATE ${CMAKE_SOURCE_DIR} ${EIGEN_INCLUDE_DIR})
 target_link_libraries(main PRIVATE flux_physics mesh_io problem advance dg_utils)
 

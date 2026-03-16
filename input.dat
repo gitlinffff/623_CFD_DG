@@ -1,0 +1,7 @@
+order=2
+CFL=0.3
+gri_file=mesh/global_refine_0.gri
+max_iter=1000000
+print_interval=200
+use_local_dt=1
+flux=HLLE
