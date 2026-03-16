@@ -130,7 +130,7 @@ void solve(const GriMesh& mesh,
         }
 
         // stage 2: U2_k = 0.75 U_k + 0.25 (U1_k - dt_k * M_k^{-1} R1_k)
-        calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
+        calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_local.data(), dt_global);
         applyInverseMassMatrix(mesh, R.data(), order);
         #pragma omp parallel for schedule(static)
         for (int k = 0; k < mesh.Ne; ++k) {
@@ -143,7 +143,7 @@ void solve(const GriMesh& mesh,
         }
 
         // stage 3: U_k = 1/3 U_k + 2/3 (U2_k - dt_k * M_k^{-1} R2_k)
-        calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
+        calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_local.data(), dt_global);
         applyInverseMassMatrix(mesh, R.data(), order);
         #pragma omp parallel for schedule(static)
         for (int k = 0; k < mesh.Ne; ++k) {

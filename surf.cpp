@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstring>
 #include <string>
+#include <iostream>
 
 extern "C" {
 	void shapeL(double* xref, int p, double** pphi);
@@ -30,6 +31,63 @@ void faceRefCoords(int face, double t, double& xi, double& eta) {
 		default: xi = t;      eta = 0.0;     break;
 	}
 }
+
+
+/*
+ * Diagnose bad state
+*/
+auto check_state = [&](const char* tag,
+                       int elem,
+                       int face,
+                       int qid,
+                       const double Uq[4],
+                       double gamma) {
+    for (int m = 0; m < 4; ++m) {
+        if (!std::isfinite(Uq[m])) {
+            std::cerr << tag << " nonfinite U at elem=" << elem
+                      << " face=" << face
+                      << " q=" << qid
+                      << " U=(" << Uq[0] << ", " << Uq[1] << ", "
+                      << Uq[2] << ", " << Uq[3] << ")\n";
+            throw std::runtime_error("nonfinite reconstructed state");
+        }
+    }
+
+    double rho  = Uq[0];
+    double rhou = Uq[1];
+    double rhov = Uq[2];
+    double E    = Uq[3];
+
+    if (rho <= 0.0) {
+        std::cerr << tag << " negative rho at elem=" << elem
+                  << " face=" << face
+                  << " q=" << qid
+                  << " rho=" << rho
+                  << " U=(" << Uq[0] << ", " << Uq[1] << ", "
+                  << Uq[2] << ", " << Uq[3] << ")\n";
+        throw std::runtime_error("negative reconstructed density");
+    }
+
+    double u = rhou / rho;
+    double v = rhov / rho;
+    double p = (gamma - 1.0) * (E - 0.5 * rho * (u * u + v * v));
+
+    if (!std::isfinite(p) || p <= 0.0) {
+        std::cerr << tag << " bad pressure at elem=" << elem
+                  << " face=" << face
+                  << " q=" << qid
+                  << " p=" << p
+                  << " rho=" << rho
+                  << " E=" << E
+                  << " u=" << u
+                  << " v=" << v
+                  << " U=(" << Uq[0] << ", " << Uq[1] << ", "
+                  << Uq[2] << ", " << Uq[3] << ")\n";
+        throw std::runtime_error("nonphysical reconstructed pressure");
+    }
+};
+
+
 
 /**
  * Physical (x,y) on face j of element k at param t in [0,1].
@@ -128,6 +186,9 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 					for (int var = 0; var < 4; ++var)
 						UR[var] += U[var * mesh.Ne * Np + elemR * Np + j] * phi[j];
 				}
+
+				check_state("UL", elemL, faceL, q, UL, params.gammad);
+				check_state("UR", elemR, faceR, q, UR, params.gammad);
 
 				/* Numerical flux Fhat(UL, UR, n) */
 				double Fhat[4], smag_q;
@@ -253,6 +314,8 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 					for (int var = 0; var < 4; ++var)
 						UL[var] += U[var * mesh.Ne * Np + elem * Np + j] * phi[j];
 				}
+
+				check_state("UL_bnd", elem, face, q, UL, params.gammad);
 
 				double Fhat[4], smag_q;
 				if (bctype == DGBcType::WALL) {
