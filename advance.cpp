@@ -89,87 +89,80 @@ void solve(const GriMesh& mesh,
 					 int max_iter,
 					 bool use_local_dt)
 {
-    const int Np = (order + 1) * (order + 2) / 2;
-    const double gammad = params.gammad;
+	const int Np = (order + 1) * (order + 2) / 2;
+	const double gammad = params.gammad;
 
-    std::vector<double> R(4 * mesh.Ne * Np);
-    std::vector<double> U1(4 * mesh.Ne * Np);
-    std::vector<double> U2(4 * mesh.Ne * Np);
-		std::vector<double> dt_local(mesh.Ne);
-		std::vector<double> dt_dummy(mesh.Ne);
-		double dt_global, dt_global_dummy;
-		std::cout << "Use local time stepping: " << use_local_dt << std::endl;
+	std::vector<double> R(4 * mesh.Ne * Np);
+	std::vector<double> U1(4 * mesh.Ne * Np);
+	std::vector<double> U2(4 * mesh.Ne * Np);
+	std::vector<double> dt_local(mesh.Ne);
+	std::vector<double> dt_dummy(mesh.Ne);
+	double dt_global, dt_global_dummy;
 
-    // Initial residual (M^{-1} applied so the norm is in DOF-update units)
-    calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
-    applyInverseMassMatrix(mesh, R.data(), order);
-    double R0 = residual_L1_norm(mesh, R.data(), order);
-    std::cout << "Initial DG L1 residual: " << R0 << std::endl;
+	double R0;
+	double t = 0.0;
+	int step = 0;
 
-    double t = 0.0;
-    int step = 0;
+	while (step < max_iter) {
+		// calculate residuals at current state
+		calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_local.data(), dt_global);
+		
+		if (residual_stride > 0 && step % residual_stride == 0) {
+			double R1 = residual_L1_norm(mesh, R.data(), order);
+			if (step == 0) R0 = R1;
+			std::cout << "Step " << step << "  t=" << t << "  L1=" << R1;
+			if (R0 > 1e-30)
+				std::cout << "  ratio=" << (R1 / R0);
+			std::cout << std::endl;
+			if (R1 < R0 * 1e-5) {
+				std::cout << "DG steady converged: L1 < 1e-5 * R0.\n";
+				break;
+			}
+		}
+	
+		auto get_dt = [&](int k) {
+			return use_local_dt ? dt_local[k] : dt_global;
+		}; // an internal function to determine if dt_local or dt_global to use
 
-    while (step < max_iter) {
-        // SSP-RK3 stage 1: U1_k = U_k - dt_k * M_k^{-1} R_k
-        calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_local.data(), dt_global);
-        applyInverseMassMatrix(mesh, R.data(), order);
+		// SSP-RK3 stage 1: U1_k = U_k - dt_k * M_k^{-1} R_k
+		applyInverseMassMatrix(mesh, R.data(), order);
+		#pragma omp parallel for schedule(static)
+		for (int k = 0; k < mesh.Ne; ++k) {
+			double dtk = get_dt(k);
+			for (int var = 0; var < 4; ++var) {
+				int base = (var * mesh.Ne + k) * Np;
+				for (int i = 0; i < Np; ++i)
+					U1[base + i] = U[base + i] - dtk * R[base + i];
+			}
+		}
 
-				// an internal function to determine if dt_local or dt_global to use
-				auto get_dt = [&](int k) {
-            return use_local_dt ? dt_local[k] : dt_global;
-        };
+		// stage 2: U2_k = 0.75 U_k + 0.25 (U1_k - dt_k * M_k^{-1} R1_k)
+		calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
+		applyInverseMassMatrix(mesh, R.data(), order);
+		#pragma omp parallel for schedule(static)
+		for (int k = 0; k < mesh.Ne; ++k) {
+			double dtk = get_dt(k);
+			for (int var = 0; var < 4; ++var) {
+				int base = (var * mesh.Ne + k) * Np;
+				for (int i = 0; i < Np; ++i)
+					U2[base + i] = 0.75 * U[base + i] + 0.25 * (U1[base + i] - dtk * R[base + i]);
+			}
+		}
 
-        #pragma omp parallel for schedule(static)
-        for (int k = 0; k < mesh.Ne; ++k) {
-            double dtk = get_dt(k);
-            for (int var = 0; var < 4; ++var) {
-                int base = (var * mesh.Ne + k) * Np;
-                for (int i = 0; i < Np; ++i)
-                    U1[base + i] = U[base + i] - dtk * R[base + i];
-            }
-        }
+		// stage 3: U_k = 1/3 U_k + 2/3 (U2_k - dt_k * M_k^{-1} R2_k)
+		calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
+		applyInverseMassMatrix(mesh, R.data(), order);
+		#pragma omp parallel for schedule(static)
+		for (int k = 0; k < mesh.Ne; ++k) {
+			double dtk = get_dt(k);
+			for (int var = 0; var < 4; ++var) {
+				int base = (var * mesh.Ne + k) * Np;
+				for (int i = 0; i < Np; ++i)
+					U[base + i] = (1.0/3.0)*U[base + i] + (2.0/3.0)*(U2[base + i] - dtk * R[base + i]);
+			}
+		}
 
-        // stage 2: U2_k = 0.75 U_k + 0.25 (U1_k - dt_k * M_k^{-1} R1_k)
-        calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_local.data(), dt_global);
-        applyInverseMassMatrix(mesh, R.data(), order);
-        #pragma omp parallel for schedule(static)
-        for (int k = 0; k < mesh.Ne; ++k) {
-            double dtk = get_dt(k);
-            for (int var = 0; var < 4; ++var) {
-                int base = (var * mesh.Ne + k) * Np;
-                for (int i = 0; i < Np; ++i)
-                    U2[base + i] = 0.75 * U[base + i] + 0.25 * (U1[base + i] - dtk * R[base + i]);
-            }
-        }
-
-        // stage 3: U_k = 1/3 U_k + 2/3 (U2_k - dt_k * M_k^{-1} R2_k)
-        calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_local.data(), dt_global);
-        applyInverseMassMatrix(mesh, R.data(), order);
-        #pragma omp parallel for schedule(static)
-        for (int k = 0; k < mesh.Ne; ++k) {
-            double dtk = get_dt(k);
-            for (int var = 0; var < 4; ++var) {
-                int base = (var * mesh.Ne + k) * Np;
-                for (int i = 0; i < Np; ++i)
-                    U[base + i] = (1.0/3.0)*U[base + i] + (2.0/3.0)*(U2[base + i] - dtk * R[base + i]);
-            }
-        }
-
-        t += dt_global; // t represents physical time for global time stepping
-        ++step;
-
-        if (residual_stride > 0 && step % residual_stride == 0) {
-            calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
-            applyInverseMassMatrix(mesh, R.data(), order);
-            double R1 = residual_L1_norm(mesh, R.data(), order);
-            std::cout << "Step " << step << "  t=" << t << "  L1=" << R1;
-            if (R0 > 1e-30)
-                std::cout << "  ratio=" << (R1 / R0);
-            std::cout << std::endl;
-            if (R1 < R0 * 1e-5) {
-                std::cout << "DG steady converged: L1 < 1e-5 * R0.\n";
-                break;
-            }
-        }
-    }
+		t += dt_global; // t represents physical time for global time stepping
+		++step;
+	}
 }
