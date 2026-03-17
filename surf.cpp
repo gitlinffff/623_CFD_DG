@@ -13,29 +13,15 @@ extern "C" {
 
 namespace {
 
-/**
- * Reference (xi, eta) on face j at 1D param t in [0,1].
- *
- * Convention matches readgri.cpp: face j is the edge from local node j
- * to local node (j+1)%3.  Reference nodes: 0=(0,0), 1=(1,0), 2=(0,1).
- *
- *   face 0: (0,0) -> (1,0)   node0 to node1   xi = t,     eta = 0
- *   face 1: (1,0) -> (0,1)   node1 to node2   xi = 1-t,   eta = t
- *   face 2: (0,1) -> (0,0)   node2 to node0   xi = 0,     eta = 1-t
- */
 void faceRefCoords(int face, double t, double& xi, double& eta) {
 	switch (face) {
-		case 0: xi = t;       eta = 0.0;     break;  /* node0=(0,0) -> node1=(1,0) */
-		case 1: xi = 1.0-t;   eta = t;       break;  /* node1=(1,0) -> node2=(0,1) */
-		case 2: xi = 0.0;     eta = 1.0-t;   break;  /* node2=(0,1) -> node0=(0,0) */
+		case 0: xi = t;       eta = 0.0;     break;
+		case 1: xi = 1.0-t;   eta = t;       break;
+		case 2: xi = 0.0;     eta = 1.0-t;   break;
 		default: xi = t;      eta = 0.0;     break;
 	}
 }
 
-
-/*
- * Diagnose bad state
-*/
 auto check_state = [](const char* tag,
                        int elem,
                        int face,
@@ -87,14 +73,6 @@ auto check_state = [](const char* tag,
     }
 };
 
-
-
-/**
- * Physical (x,y) on face j of element k at param t in [0,1].
- *
- * Convention matches readgri.cpp and faceRefCoords above:
- * face j goes from physical node j to physical node (j+1)%3.
- */
 void facePhysCoords(const GriMesh& mesh, int k, int face, double t,
                    double& x, double& y) {
 	int v0 = mesh.E[k * 3 + face];
@@ -105,7 +83,6 @@ void facePhysCoords(const GriMesh& mesh, int k, int face, double t,
 	y = y0 + t * (y1 - y0);
 }
 
-/** Ref coords (xi, eta) in element k corresponding to physical (x,y). */
 void physToRef(const GriMesh& mesh, int k, double x, double y,
                double& xi, double& eta) {
 	Eigen::Matrix2d J = Jacobian(mesh, k);
@@ -118,7 +95,32 @@ void physToRef(const GriMesh& mesh, int k, double x, double y,
 	eta = ref(1);
 }
 
-} // namespace
+bool boundary_nodes_available(const GriMesh& mesh) {
+	return (int)mesh.BedgeNodeOffset.size() == mesh.num_boundary_faces + 1;
+}
+
+void quadratic_edge_geom(const GriMesh& mesh, int n0, int n1, int nm, double t,
+                         double& nx, double& ny, double& jac) {
+	double x0 = mesh.V[n0 * 2 + 0], y0 = mesh.V[n0 * 2 + 1];
+	double x1 = mesh.V[n1 * 2 + 0], y1 = mesh.V[n1 * 2 + 1];
+	double xm = mesh.V[nm * 2 + 0], ym = mesh.V[nm * 2 + 1];
+
+	double dN0 = 4.0 * t - 3.0;
+	double dNm = 4.0 - 8.0 * t;
+	double dN1 = 4.0 * t - 1.0;
+
+	double dxdt = dN0 * x0 + dNm * xm + dN1 * x1;
+	double dydt = dN0 * y0 + dNm * ym + dN1 * y1;
+	jac = std::sqrt(dxdt * dxdt + dydt * dydt);
+	if (jac < 1e-20) jac = 1e-20;
+
+	double tx = dxdt / jac;
+	double ty = dydt / jac;
+	nx = ty;
+	ny = -tx;
+}
+
+}
 
 void addSurfTerm(const GriMesh& mesh, double* R, int order,
                 const double* U, const ProblemParams& params, FluxFn flux_fn,
@@ -126,8 +128,6 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 	int Np = (order + 1) * (order + 2) / 2;
 	QuadratureRule quad1d = getQuadratureRule1D(order);
 
-	// Different faces may share the same element, so R and sum_s updates use
-	// atomic operations. Each thread owns its own phi buffer for shapeL.
 	#pragma omp parallel
 	{
 		double* phi = nullptr;
@@ -147,29 +147,19 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 				double t = quad1d.xq[q];
 				double w = quad1d.wq[q] * L;
 
-				/* Ref coords for elemL on face faceL */
 				double xiL, etaL;
 				faceRefCoords(faceL, t, xiL, etaL);
 
-				/* Physical point */
 				double x_phys, y_phys;
 				facePhysCoords(mesh, elemL, faceL, t, x_phys, y_phys);
 
-				/* Ref coords for elemR.
-				 * For regular interior faces physToRef maps the shared physical
-				 * point back into elemR's reference domain.
-				 * For PERIODIC faces the physical point on elemL's side is NOT
-				 * inside elemR's physical domain, so physToRef produces wildly
-				 * out-of-range coordinates; in that case fall back to the direct
-				 * parametric mapping faceRefCoords(faceR, t). */
 				double xiR, etaR;
 				physToRef(mesh, elemR, x_phys, y_phys, xiR, etaR);
 				if (xiR < -0.1 || etaR < -0.1 || xiR + etaR > 1.1) {
-					/* Periodic face: use local face parametrisation of elemR. */
+
 					faceRefCoords(faceR, t, xiR, etaR);
 				}
 
-				/* Interpolate UL at (xiL, etaL) */
 				double xrefL[2] = {xiL, etaL};
 				shapeL(xrefL, order, &phi);
 				double UL[4] = {0, 0, 0, 0};
@@ -178,7 +168,6 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 						UL[var] += U[var * mesh.Ne * Np + elemL * Np + j] * phi[j];
 				}
 
-				/* Interpolate UR at (xiR, etaR) */
 				double xrefR[2] = {xiR, etaR};
 				shapeL(xrefR, order, &phi);
 				double UR[4] = {0, 0, 0, 0};
@@ -190,12 +179,10 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 				check_state("UL", elemL, faceL, q, UL, params.gammad);
 				check_state("UR", elemR, faceR, q, UR, params.gammad);
 
-				/* Numerical flux Fhat(UL, UR, n) */
 				double Fhat[4], smag_q;
 				flux_fn(UL, UR, n, params.gammad, Fhat, smag_q);
 				max_smag_edge = std::max(max_smag_edge, smag_q);
 
-				/* phi_i at (xiL, etaL) for elemL; add phi_i * Fhat * w to R */
 				shapeL(xrefL, order, &phi);
 				for (int i = 0; i < Np; ++i) {
 					double phi_i = phi[i];
@@ -205,7 +192,6 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 					}
 				}
 
-				/* phi_i at (xiR, etaR) for elemR; subtract phi_i * Fhat * w (Fhat(UR,UL,-n) = -Fhat) */
 				shapeL(xrefR, order, &phi);
 				for (int i = 0; i < Np; ++i) {
 					double phi_i = phi[i];
@@ -222,10 +208,8 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 		}
 
 		if (phi) free(phi);
-	} // end omp parallel
+	}
 }
-
-// Freestream-only boundary contribution using ghost = interior state (not full BC implementation).
 
 namespace {
 enum class DGBcType {
@@ -247,7 +231,6 @@ static bool contains_token(const std::string& s, const char* token) {
 static DGBcType classify_boundary_name(const std::string& name_raw) {
 	std::string name = to_lower(name_raw);
 
-	// Explicit mapping for turbine blade .gri: BGroup2/6 = walls, 4 = outflow, 8 = inflow.
 	if (name == "bgroup2" || name == "bgroup6")
 		return DGBcType::WALL;
 	if (name == "bgroup4")
@@ -255,7 +238,6 @@ static DGBcType classify_boundary_name(const std::string& name_raw) {
 	if (name == "bgroup8")
 		return DGBcType::INFLOW;
 
-	// Common CFD naming conventions
 	if (contains_token(name, "wall") || contains_token(name, "solid"))
 		return DGBcType::WALL;
 	if (contains_token(name, "inflow") || contains_token(name, "inlet"))
@@ -265,49 +247,71 @@ static DGBcType classify_boundary_name(const std::string& name_raw) {
 	if (contains_token(name, "freestream") || contains_token(name, "farfield") || contains_token(name, "free"))
 		return DGBcType::FREESTREAM;
 
-	// Default: be conservative and preserve freestream test behavior.
 	return DGBcType::FREESTREAM;
 }
-} // namespace
+}
 
 void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
                     const double* U, const ProblemParams& params, FluxFn flux_fn,
-										std::vector<double>& sum_s) {
+											std::vector<double>& sum_s) {
 	int Np = (order + 1) * (order + 2) / 2;
-	QuadratureRule quad1d = getQuadratureRule1D(order);
+	QuadratureRule quad1d_linear = getQuadratureRule1D(order);
+	int curved_quad_order = order + 1;
+	if (curved_quad_order > 4) curved_quad_order = 4;
+	QuadratureRule quad1d_curved = getQuadratureRule1D(curved_quad_order);
 
 	const double nin[2] = {std::cos(params.alpha), std::sin(params.alpha)};
 	const double R_gas = 1.0 / params.gammad;
+	const bool has_bedge_nodes = boundary_nodes_available(mesh);
 
-	// Different boundary faces can belong to the same element, so R and sum_s
-	// updates use atomic operations. Each thread owns its own phi buffer.
 	#pragma omp parallel
 	{
 		double* phi = nullptr;
 
 		#pragma omp for schedule(static)
-		for (int ib = 0; ib < mesh.num_boundary_faces; ++ib) {
-			int elem = mesh.B2E[3 * ib + 0];
-			int face = mesh.B2E[3 * ib + 1];
-			int bgroup = mesh.B2E[3 * ib + 2]; // 1-based into mesh.Bname
-			const double* n = &mesh.Bn[2 * ib];
-			double L = mesh.Bn_len[ib];
-			double max_smag_edge = 0.0;
+			for (int ib = 0; ib < mesh.num_boundary_faces; ++ib) {
+				int elem = mesh.B2E[3 * ib + 0];
+				int face = mesh.B2E[3 * ib + 1];
+				int bgroup = mesh.B2E[3 * ib + 2];
+				double max_smag_edge = 0.0;
+				double edge_measure = 0.0;
 
-			std::string bname = "unknown";
-			if (bgroup >= 1 && (size_t)bgroup <= mesh.Bname.size())
-				bname = mesh.Bname[(size_t)bgroup - 1];
-			DGBcType bctype = classify_boundary_name(bname);
+				int bedge_start = 0;
+				int bedge_nnode = 0;
+				if (has_bedge_nodes) {
+					bedge_start = mesh.BedgeNodeOffset[(size_t)ib];
+					bedge_nnode = mesh.BedgeNodeOffset[(size_t)ib + 1] - bedge_start;
+				}
+				bool is_quadratic_curve = has_bedge_nodes && (bedge_nnode == 3);
+				const QuadratureRule& quad1d = is_quadratic_curve ? quad1d_curved : quad1d_linear;
 
-			for (int q = 0; q < quad1d.nq; ++q) {
-				double t = quad1d.xq[q];
-				double w = quad1d.wq[q] * L;
+				std::string bname = "unknown";
+				if (bgroup >= 1 && (size_t)bgroup <= mesh.Bname.size())
+					bname = mesh.Bname[(size_t)bgroup - 1];
+				DGBcType bctype = classify_boundary_name(bname);
 
-				double xi, eta;
-				faceRefCoords(face, t, xi, eta);
-				double xref[2] = {xi, eta};
+				for (int q = 0; q < quad1d.nq; ++q) {
+					double t = quad1d.xq[q];
+					double n_q[2];
+					double w = 0.0;
+					if (is_quadratic_curve) {
+						int n0 = mesh.BedgeNodes[(size_t)bedge_start + 0];
+						int n1 = mesh.BedgeNodes[(size_t)bedge_start + 1];
+						int nm = mesh.BedgeNodes[(size_t)bedge_start + 2];
+						double jac;
+						quadratic_edge_geom(mesh, n0, n1, nm, t, n_q[0], n_q[1], jac);
+						w = quad1d.wq[q] * jac;
+					} else {
+						n_q[0] = mesh.Bn[2 * ib + 0];
+						n_q[1] = mesh.Bn[2 * ib + 1];
+						w = quad1d.wq[q] * mesh.Bn_len[ib];
+					}
+					edge_measure += w;
 
-				// Interpolate UL at (xi, eta)
+					double xi, eta;
+					faceRefCoords(face, t, xi, eta);
+					double xref[2] = {xi, eta};
+
 				shapeL(xref, order, &phi);
 				double UL[4] = {0, 0, 0, 0};
 				for (int j = 0; j < Np; ++j) {
@@ -317,29 +321,26 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 
 				check_state("UL_bnd", elem, face, q, UL, params.gammad);
 
-				double Fhat[4], smag_q;
-				if (bctype == DGBcType::WALL) {
-					WallFlux(UL, n, params.gammad, Fhat, smag_q);
-				} else if (bctype == DGBcType::INFLOW) {
-					try {
-						InflowFlux(UL, n, nin, params.rho0, params.a0, params.gammad, R_gas, flux_fn, Fhat, smag_q);
-					} catch (const std::exception&) {
-						// Interior state is unphysical during early iteration; use zero-dissipation fallback.
-						flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
+					double Fhat[4], smag_q;
+					if (bctype == DGBcType::WALL) {
+						WallFlux(UL, n_q, params.gammad, Fhat, smag_q);
+					} else if (bctype == DGBcType::INFLOW) {
+						try {
+							InflowFlux(UL, n_q, nin, params.rho0, params.a0, params.gammad, R_gas, flux_fn, Fhat, smag_q);
+						} catch (const std::exception&) {
+							flux_fn(UL, UL, n_q, params.gammad, Fhat, smag_q);
+						}
+					} else if (bctype == DGBcType::OUTFLOW) {
+						try {
+							OutflowFlux(UL, n_q, params.pout, params.gammad, flux_fn, Fhat, smag_q);
+						} catch (const std::exception&) {
+							flux_fn(UL, UL, n_q, params.gammad, Fhat, smag_q);
+						}
+					} else {
+						flux_fn(UL, UL, n_q, params.gammad, Fhat, smag_q);
 					}
-				} else if (bctype == DGBcType::OUTFLOW) {
-					try {
-						OutflowFlux(UL, n, params.pout, params.gammad, flux_fn, Fhat, smag_q);
-					} catch (const std::exception&) {
-						flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
-					}
-				} else {
-					// Freestream test behavior: ghost state equals interior state.
-					flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
-				}
-				max_smag_edge = std::max(max_smag_edge, smag_q);
+					max_smag_edge = std::max(max_smag_edge, smag_q);
 
-				// Add boundary contribution to residual.
 				shapeL(xref, order, &phi);
 				for (int i = 0; i < Np; ++i) {
 					double phi_i = phi[i];
@@ -348,11 +349,11 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 						R[(var * mesh.Ne + elem) * Np + i] += phi_i * Fhat[var] * w;
 					}
 				}
+				}
+				#pragma omp atomic
+				sum_s[elem] += max_smag_edge * edge_measure;
 			}
-			#pragma omp atomic
-			sum_s[elem] += max_smag_edge * L;
-		}
 
 		if (phi) free(phi);
-	} // end omp parallel
+	}
 }

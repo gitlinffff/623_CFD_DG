@@ -12,8 +12,13 @@ namespace {
 using EdgeKey = std::pair<int, int>;
 
 struct VisitedEntry {
-    int elemL;   /* 0-based */
-    int faceL;   /* 0-based local face */
+    int elemL;
+    int faceL;
+};
+
+struct BoundaryEdgeInfo {
+    int bgroup;
+    std::vector<int> nodes;
 };
 
 bool read_line_ints(std::ifstream& f, int* out, int n) {
@@ -59,7 +64,6 @@ void face_outward_normal(const GriMesh& mesh, int elem, int face,
     nx = ey;
     ny = -ex;
 
-    // Enforce outward orientation with respect to element centroid.
     double mx = 0.5 * (x0 + x1);
     double my = 0.5 * (y0 + y1);
     double cx = (x0 + x1 + x2) / 3.0;
@@ -71,7 +75,7 @@ void face_outward_normal(const GriMesh& mesh, int elem, int face,
     }
 }
 
-}  // namespace
+}
 
 bool read_gri(const char* fname, GriMesh& mesh) {
     std::ifstream f(fname);
@@ -99,28 +103,35 @@ bool read_gri(const char* fname, GriMesh& mesh) {
         if (!(ss >> NB)) return false;
     }
 
-    std::map<EdgeKey, std::string> B;
+    std::map<EdgeKey, BoundaryEdgeInfo> B;
     mesh.Bname.clear();
     for (int i = 0; i < NB; ++i) {
         std::string line;
         if (!std::getline(f, line)) return false;
         std::istringstream ss(line);
-        int Nb;
+        int Nb, nnode;
         std::string name;
-        if (!(ss >> Nb)) return false;
-        ss >> name;  /* skip one token, then get name - format is "Nb ? name" */
-        if (!(ss >> name)) return false;
+        if (!(ss >> Nb >> nnode >> name)) return false;
+        if (nnode < 2) return false;
         mesh.Bname.push_back(name);
+        int bgroup = (int)mesh.Bname.size();
         for (int n = 0; n < Nb; ++n) {
             std::string line2;
             if (!std::getline(f, line2)) return false;
             std::istringstream ss2(line2);
-            int n1, n2;
-            if (!(ss2 >> n1 >> n2)) return false;
-            n1--; n2--;
+            std::vector<int> nodes((size_t)nnode);
+            for (int k = 0; k < nnode; ++k) {
+                if (!(ss2 >> nodes[(size_t)k])) return false;
+                nodes[(size_t)k]--;
+            }
+            int n1 = nodes[0];
+            int n2 = nodes[1];
             int a = n1 < n2 ? n1 : n2;
             int b = n1 < n2 ? n2 : n1;
-            B[EdgeKey(a, b)] = name;
+            BoundaryEdgeInfo info;
+            info.bgroup = bgroup;
+            info.nodes = std::move(nodes);
+            B[EdgeKey(a, b)] = std::move(info);
         }
     }
 
@@ -140,9 +151,6 @@ bool read_gri(const char* fname, GriMesh& mesh) {
         Ne0 += ne;
     }
 
-    // Ensure a consistent CCW local-node ordering for every triangle.
-    // This guarantees that boundary normals built from local edges point
-    // outward and keeps face orientation logic robust on all mesh levels.
     const char* disable_ccw_fix = std::getenv("DG_DISABLE_CCW_FIX");
     if (!(disable_ccw_fix && std::strcmp(disable_ccw_fix, "1") == 0)) {
         for (int e = 0; e < mesh.Ne; ++e) {
@@ -193,6 +201,9 @@ bool read_gri(const char* fname, GriMesh& mesh) {
     std::vector<double> In, In_len;
     std::vector<int> B2E;
     std::vector<double> Bn, Bn_len;
+    std::vector<int> BedgeNodeOffset;
+    std::vector<int> BedgeNodes;
+    BedgeNodeOffset.push_back(0);
     std::map<EdgeKey, VisitedEntry> visited;
 
     for (int i = 0; i < mesh.Ne; ++i) {
@@ -243,10 +254,9 @@ bool read_gri(const char* fname, GriMesh& mesh) {
                         visited[faceID] = { i, j };
                     }
                 } else {
-                    int bgroup = 1;
-                    for (size_t k = 0; k < mesh.Bname.size(); ++k) {
-                        if (mesh.Bname[k] == itB->second) { bgroup = (int)k + 1; break; }
-                    }
+                    const BoundaryEdgeInfo& bedge = itB->second;
+                    if (bedge.nodes.size() < 2) return false;
+                    int bgroup = bedge.bgroup;
                     B2E.push_back(i);
                     B2E.push_back(j);
                     B2E.push_back(bgroup);
@@ -255,6 +265,22 @@ bool read_gri(const char* fname, GriMesh& mesh) {
                     Bn.push_back(nx);
                     Bn.push_back(ny);
                     Bn_len.push_back(len);
+
+                    bool same_dir = (bedge.nodes[0] == na && bedge.nodes[1] == nb);
+                    bool opp_dir = (bedge.nodes[0] == nb && bedge.nodes[1] == na);
+                    BedgeNodes.push_back(na);
+                    BedgeNodes.push_back(nb);
+                    if (same_dir) {
+                        for (size_t idx = 2; idx < bedge.nodes.size(); ++idx)
+                            BedgeNodes.push_back(bedge.nodes[idx]);
+                    } else if (opp_dir) {
+                        for (int idx = (int)bedge.nodes.size() - 1; idx >= 2; --idx)
+                            BedgeNodes.push_back(bedge.nodes[(size_t)idx]);
+                    } else {
+                        for (size_t idx = 2; idx < bedge.nodes.size(); ++idx)
+                            BedgeNodes.push_back(bedge.nodes[idx]);
+                    }
+                    BedgeNodeOffset.push_back((int)BedgeNodes.size());
                 }
             } else {
                 auto itV = visited.find(faceID);
@@ -285,6 +311,8 @@ bool read_gri(const char* fname, GriMesh& mesh) {
     mesh.B2E = std::move(B2E);
     mesh.Bn = std::move(Bn);
     mesh.Bn_len = std::move(Bn_len);
+    mesh.BedgeNodeOffset = std::move(BedgeNodeOffset);
+    mesh.BedgeNodes = std::move(BedgeNodes);
 
     return true;
 }

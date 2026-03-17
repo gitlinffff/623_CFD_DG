@@ -35,7 +35,7 @@ double getp0(double rho0, double a0, double gammad) {
 
 void isentropic_prim_from_M(double rho0, double p0, double gammad, double M, double alpha,
                             double& rho, double& u, double& v, double& p) {
-    /* fac = 1 + (g-1)/2 * M^2 */
+
     double fac = 1.0 + 0.5 * (gammad - 1.0) * M * M;
     p = p0 / std::pow(fac, gammad / (gammad - 1.0));
     rho = rho0 / std::pow(fac, 1.0 / (gammad - 1.0));
@@ -45,7 +45,7 @@ void isentropic_prim_from_M(double rho0, double p0, double gammad, double M, dou
 }
 
 double total_temperature(double rho, double u, double v, double p, double gammad){
-    /* Tt/T = 1 + (g-1)/2 * M^2, M^2 = (u^2+v^2)/a^2, a^2 = gammad*p/rho */
+
     const double eps = 1e-14;
     double a2 = gammad * p / (rho + eps);
     a2 = std::max(a2, eps);
@@ -53,12 +53,11 @@ double total_temperature(double rho, double u, double v, double p, double gammad
     double M2 = (u*u + v*v) / a2;
     double fac = 1.0 + 0.5*(gammad-1.0)*M2;
 
-    /* Tt = T * fac, T = gammad*p/rho (R=1/gammad) */
     return gammad * (p / (rho + eps)) * fac;
 }
 
 double total_pressure(double rho, double u, double v, double p, double gammad) {
-    /* pt = p * (1 + (g-1)/2 * M^2)^(g/(g-1)), M^2 = (u^2+v^2)/a^2 */
+
     const double eps = 1e-14;
     double a2 = gammad * p / (rho + eps);
     if (a2 < eps) a2 = eps;
@@ -90,13 +89,11 @@ Eigen::Matrix<double, 4, 2> vec_phyFlux(const double U[4], double gammad) {
 
 	Eigen::Matrix<double, 4, 2> F;
 
-	// x-fluxes (Column 0)
 	F(0, 0) = rho * u;
 	F(1, 0) = rho * u * u + p;
 	F(2, 0) = rho * u * v;
 	F(3, 0) = (E + p) * u;
 
-	// y-fluxes (Column 1)
 	F(0, 1) = rho * v;
 	F(1, 1) = rho * v * u;
 	F(2, 1) = rho * v * v + p;

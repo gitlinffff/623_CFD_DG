@@ -4,28 +4,28 @@
 #include <vector>
 #include <string>
 
-/** Mesh and face data from .gri (Gambit); all indices 0-based for C++. */
 struct GriMesh {
     int Nn;
     int Ne;
-    std::vector<double> V;        /* Nn*2: x,y per vertex */
-    std::vector<int> E;            /* Ne*3: triangle connectivity (node indices) */
-    std::vector<double> Area;     /* Ne: area per element */
+    std::vector<double> V;
+    std::vector<int> E;
+    std::vector<double> Area;
 
     int num_interior_faces;
-    std::vector<int> I2E;          /* num_interior_faces * 4: [elemL, faceL, elemR, faceR] */
-    std::vector<double> In;       /* num_interior_faces * 2: unit normal (L to R), use &In[2*i] as n[2] */
-    std::vector<double> In_len;   /* num_interior_faces: face length */
+    std::vector<int> I2E;
+    std::vector<double> In;
+    std::vector<double> In_len;
 
     int num_boundary_faces;
-    std::vector<int> B2E;          /* num_boundary_faces * 3: [elem, face, bgroup] */
-    std::vector<double> Bn;       /* num_boundary_faces * 2: unit outward normal, use &Bn[2*i] as n[2] */
-    std::vector<double> Bn_len;   /* num_boundary_faces: face length */
+    std::vector<int> B2E;
+    std::vector<double> Bn;
+    std::vector<double> Bn_len;
+    std::vector<int> BedgeNodeOffset;
+    std::vector<int> BedgeNodes;
 
-    std::vector<std::string> Bname; /* boundary names; bgroup in B2E is 1-based index into Bname */
+    std::vector<std::string> Bname;
 };
 
-/** Load .gri file and build face tables (normals, lengths). Returns true on success. */
 bool read_gri(const char* fname, GriMesh& mesh);
 
 #endif

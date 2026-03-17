@@ -1,4 +1,5 @@
 #include "restart.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -7,6 +8,7 @@
 #include <sstream>
 #include <sys/stat.h>
 #include <utility>
+#include <vector>
 
 extern "C" {
     void shapeL(double* xref, int p, double** pphi);
@@ -22,7 +24,7 @@ void make_dirs(const std::string& path) {
     for (size_t i = 1; i <= path.size(); ++i) {
         if (i == path.size() || path[i] == '/') {
             std::string sub = path.substr(0, i);
-            mkdir(sub.c_str(), 0755); // ignore EEXIST
+            mkdir(sub.c_str(), 0755);
         }
     }
 }
@@ -90,7 +92,79 @@ bool interpolation_matrix(int src_order, int dst_order, std::vector<double>& T) 
     return true;
 }
 
-} // namespace
+struct LinearTriMap {
+    double x1;
+    double y1;
+    double xr;
+    double yr;
+    double xs;
+    double ys;
+    double det;
+    double xmin;
+    double xmax;
+    double ymin;
+    double ymax;
+};
+
+bool build_linear_tri_map(const GriMesh& mesh, int elem, LinearTriMap& map) {
+    const int* tri = &mesh.E[elem * 3];
+    const int n1 = tri[0];
+    const int n2 = tri[1];
+    const int n3 = tri[2];
+
+    const double x1 = mesh.V[n1 * 2 + 0];
+    const double y1 = mesh.V[n1 * 2 + 1];
+    const double x2 = mesh.V[n2 * 2 + 0];
+    const double y2 = mesh.V[n2 * 2 + 1];
+    const double x3 = mesh.V[n3 * 2 + 0];
+    const double y3 = mesh.V[n3 * 2 + 1];
+
+    map.x1 = x1;
+    map.y1 = y1;
+    map.xr = x2 - x1;
+    map.yr = y2 - y1;
+    map.xs = x3 - x1;
+    map.ys = y3 - y1;
+    map.det = map.xr * map.ys - map.yr * map.xs;
+    if (std::fabs(map.det) < 1e-14) return false;
+
+    map.xmin = std::min(x1, std::min(x2, x3));
+    map.xmax = std::max(x1, std::max(x2, x3));
+    map.ymin = std::min(y1, std::min(y2, y3));
+    map.ymax = std::max(y1, std::max(y2, y3));
+    return true;
+}
+
+inline void ref_to_phys(const LinearTriMap& map, double r, double s, double& x, double& y) {
+    x = map.x1 + map.xr * r + map.xs * s;
+    y = map.y1 + map.yr * r + map.ys * s;
+}
+
+inline void phys_to_ref(const LinearTriMap& map, double x, double y, double& r, double& s) {
+    const double dx = x - map.x1;
+    const double dy = y - map.y1;
+    r = (dx * map.ys - dy * map.xs) / map.det;
+    s = (map.xr * dy - map.yr * dx) / map.det;
+}
+
+inline bool inside_ref_triangle(double r, double s, double tol) {
+    return (r >= -tol) && (s >= -tol) && (r + s <= 1.0 + tol);
+}
+
+int find_source_elem_for_point(const std::vector<LinearTriMap>& src_maps, double x, double y) {
+    const double tol = 1e-10;
+    for (int e = 0; e < (int)src_maps.size(); ++e) {
+        const LinearTriMap& m = src_maps[e];
+        if (x < m.xmin - tol || x > m.xmax + tol || y < m.ymin - tol || y > m.ymax + tol)
+            continue;
+        double r = 0.0, s = 0.0;
+        phys_to_ref(m, x, y, r, s);
+        if (inside_ref_triangle(r, s, 1e-8)) return e;
+    }
+    return -1;
+}
+
+}
 
 bool write_restart_dat(const std::string& filepath,
                        const GriMesh& mesh,
@@ -153,7 +227,7 @@ bool read_restart_dat(const std::string& filepath, RestartData& data) {
             break;
         } else {
             std::string tail;
-            std::getline(in, tail); // skip unknown line
+            std::getline(in, tail);
         }
     }
 
@@ -217,6 +291,103 @@ bool initialize_from_restart(const RestartData& src,
             }
         }
     }
+
+    return true;
+}
+
+bool initialize_from_restart_cross_mesh(const RestartData& src,
+                                        const GriMesh& src_mesh,
+                                        int target_order,
+                                        const GriMesh& target_mesh,
+                                        double* U_target,
+                                        std::string& err_msg) {
+    err_msg.clear();
+
+    if (src.nvars != 4) {
+        err_msg = "restart nvars must be 4.";
+        return false;
+    }
+    if (target_order != src.order) {
+        err_msg = "cross-mesh restart requires the same DG order.";
+        return false;
+    }
+    if (src_mesh.Ne != src.Ne) {
+        err_msg = "source mesh element count does not match restart Ne.";
+        return false;
+    }
+
+    const int np = num_basis(target_order);
+    if (src.Np != np) {
+        err_msg = "restart Np is inconsistent with restart order.";
+        return false;
+    }
+    if ((int)src.U.size() != 4 * src.Ne * src.Np) {
+        err_msg = "restart data size is inconsistent.";
+        return false;
+    }
+
+    std::vector<std::pair<double, double>> ref_nodes;
+    if (!reference_nodes(target_order, ref_nodes) || (int)ref_nodes.size() != np) {
+        err_msg = "failed to build reference nodes for cross-mesh restart.";
+        return false;
+    }
+
+    std::vector<LinearTriMap> src_maps(src_mesh.Ne);
+    for (int e = 0; e < src_mesh.Ne; ++e) {
+        if (!build_linear_tri_map(src_mesh, e, src_maps[e])) {
+            err_msg = "degenerate source triangle found while building cross-mesh restart.";
+            return false;
+        }
+    }
+
+    std::vector<LinearTriMap> dst_maps(target_mesh.Ne);
+    for (int e = 0; e < target_mesh.Ne; ++e) {
+        if (!build_linear_tri_map(target_mesh, e, dst_maps[e])) {
+            err_msg = "degenerate target triangle found while building cross-mesh restart.";
+            return false;
+        }
+    }
+
+    std::vector<int> parent(target_mesh.Ne, -1);
+    for (int e = 0; e < target_mesh.Ne; ++e) {
+        double xc = 0.0, yc = 0.0;
+        ref_to_phys(dst_maps[e], 1.0 / 3.0, 1.0 / 3.0, xc, yc);
+        parent[e] = find_source_elem_for_point(src_maps, xc, yc);
+        if (parent[e] < 0) {
+            std::ostringstream oss;
+            oss << "failed to find source element for target element " << e
+                << " (centroid at x=" << xc << ", y=" << yc << ").";
+            err_msg = oss.str();
+            return false;
+        }
+    }
+
+    double* phi = nullptr;
+    for (int e = 0; e < target_mesh.Ne; ++e) {
+        const int src_elem = parent[e];
+        const LinearTriMap& src_map = src_maps[src_elem];
+        const LinearTriMap& dst_map = dst_maps[e];
+        for (int m = 0; m < np; ++m) {
+            const double rt = ref_nodes[m].first;
+            const double st = ref_nodes[m].second;
+            double x = 0.0, y = 0.0, rs = 0.0, ss = 0.0;
+            ref_to_phys(dst_map, rt, st, x, y);
+            phys_to_ref(src_map, x, y, rs, ss);
+
+            double xref[2] = {rs, ss};
+            shapeL(xref, src.order, &phi);
+            for (int var = 0; var < 4; ++var) {
+                const int src_base = (var * src_mesh.Ne + src_elem) * np;
+                const int dst_idx = (var * target_mesh.Ne + e) * np + m;
+                double val = 0.0;
+                for (int j = 0; j < np; ++j) {
+                    val += phi[j] * src.U[src_base + j];
+                }
+                U_target[dst_idx] = val;
+            }
+        }
+    }
+    if (phi) free(phi);
 
     return true;
 }

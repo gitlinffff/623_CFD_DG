@@ -10,10 +10,10 @@ ProblemParams::ProblemParams() {
 	rho0 = 1.0;
 	a0 = 1.0;
 	gammad = 1.4;
-	alpha = 50.0 * PI / 180.0;  /* 50 deg */
+	alpha = 50.0 * PI / 180.0;
 	double p0 = getp0(rho0, a0, gammad);
 	pout = 0.7 * p0;
-	/* Unsteady wake (proj.pdf): Vrot=a0, delta_y=18mm, fwake=0.1, delta=0.1 */
+
 	Vrot = 1.0;
 	delta_y = 18;
 	fwake = 0.1;
@@ -24,9 +24,8 @@ double getp0(const ProblemParams& p) {
 	return getp0(p.rho0, p.a0, p.gammad);
 }
 
-
 void initialize_uniform(double* U, int Ne, int order, const ProblemParams& params) {
-	const double Mach = 0.1;  // freestream Mach number used for steady initialization
+	const double Mach = 0.1;
 
 	int Np = (order + 1) * (order + 2) / 2;
 	double rho, u, v, p;
@@ -34,11 +33,9 @@ void initialize_uniform(double* U, int Ne, int order, const ProblemParams& param
 	isentropic_prim_from_M(params.rho0, p0, params.gammad, Mach, params.alpha,
 												 rho, u, v, p);
 
-	// Convert to conserved variables
 	double Ucons[4];
 	primToCons(rho, u, v, p, params.gammad, Ucons);
 
-	// Layout: [Element k][Variable var][Basis j]
 	for (int var = 0; var < 4; ++var) {
 		for (int k = 0; k < Ne; ++k) {
 			for (int i = 0; i < Np; ++i) {

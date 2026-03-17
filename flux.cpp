@@ -33,7 +33,6 @@ void fluxRusanov(const double UL[4], const double UR[4], const double n[2], doub
         Fhat[k] = 0.5 * (FL[k] + FR[k]) - 0.5 * alpha * (UR[k] - UL[k]);
 }
 
-
 void fluxHLLC(const double UL[4], const double UR[4], const double n[2], double gammad,
           double Fhat[4], double& smag) {
     double rhoL, uL, vL, pL, cL;
@@ -94,14 +93,13 @@ void fluxHLLC(const double UL[4], const double UR[4], const double n[2], double 
         double E_star = ((sr - un) * E_R - pR * un + p_star * s_star) / (sr - s_star);
         double u_star = s_star * nx - utR * ny;
         double v_star = s_star * ny + utR * nx;
-    
+
         Fhat[0] = FR[0] + sr * (r_star - UR[0]);
         Fhat[1] = FR[1] + sr * (r_star * u_star - UR[1]);
         Fhat[2] = FR[2] + sr * (r_star * v_star - UR[2]);
         Fhat[3] = FR[3] + sr * (E_star - UR[3]);
     }
 }
-
 
 void fluxROE(const double UL[4], const double UR[4], const double n[2], double gammad,
          double Fhat[4], double& smag) {
@@ -182,7 +180,6 @@ void fluxROE(const double UL[4], const double UR[4], const double n[2], double g
         Fhat[k] = 0.5 * (FL[k] + FR[k]) - 0.5 * D[k];
 }
 
-
 void fluxHLLE(const double UL[4], const double UR[4], const double n[2], double gammad,
           double Fhat[4], double& smag) {
     double rhoL, uL, vL, pL, cL;
@@ -221,7 +218,6 @@ void fluxHLLE(const double UL[4], const double UR[4], const double n[2], double 
         Fhat[k] = (SR * FL[k] - SL * FR[k] + SL * SR * (UR[k] - UL[k])) / dS;
 }
 
-
 void WallFlux(const double UL[4], const double n[2], double gammad,
          double Fhat[4], double& smag){
     double rhoL, uL, vL, pL, cL;
@@ -232,14 +228,13 @@ void WallFlux(const double UL[4], const double n[2], double gammad,
     ub[0] = uL - (uL*n[0] + vL*n[1])*n[0];
     ub[1] = vL - (uL*n[0] + vL*n[1])*n[1];
     pb = (gammad - 1) * (UL[3] - 0.5*rhoL*(ub[0]*ub[0] + ub[1]*ub[1]));
-    
+
     Fhat[0] = 0.0;
     Fhat[1] = pb*n[0];
     Fhat[2] = pb*n[1];
     Fhat[3] = 0.0;
     smag = std::abs(uL*n[0] + vL*n[1]) + cL;
 }
-
 
 void InflowFlux(const double UL[4], const double n[2], const double nin[2],
                 double rho0, double a0, double gammad, double R,
@@ -253,7 +248,7 @@ void InflowFlux(const double UL[4], const double n[2], const double nin[2],
 
     double Jplus = (uL*n[0] +vL*n[1]) + 2*cL/(gammad - 1);
     double dn = n[0]*nin[0] + n[1]*nin[1];
-    
+
     double A = gammad*R*Tt*dn*dn - 0.5*(gammad - 1)*Jplus*Jplus;
     double B = 4*gammad*R*Tt*dn/(gammad - 1);
     double C = 4*gammad*R*Tt/((gammad-1)*(gammad-1)) - Jplus*Jplus;
@@ -275,7 +270,7 @@ void InflowFlux(const double UL[4], const double n[2], const double nin[2],
             Mb = Mb2;
     else
             throw std::runtime_error("Inflow BC: no physical Mach root");
-    
+
     const double Tb  = Tt / (1.0 + 0.5*(gammad - 1.0)*Mb*Mb);
 
     const double pb = pt * std::pow(Tb / Tt, gammad/(gammad - 1.0));
@@ -295,8 +290,6 @@ void InflowFlux(const double UL[4], const double n[2], const double nin[2],
     FluxFunction(UL, Ub, n, gammad, Fhat, smag);
 }
 
-
-// test use
 void InflowFlux_compute_Ub(const double UL[4], const double n[2], const double nin[2],
                            double rho0, double a0, double gammad, double R, double Ub[4]) {
     const double pt = rho0 * a0 * a0 / gammad;
@@ -336,7 +329,7 @@ void OutflowFlux(const double UL[4], const double n[2],
 
     if (rhoL <= 0)
         throw std::runtime_error("Outflow BC: negative density");
-    
+
     double unL = uL*n[0] + vL*n[1];
     double Jplus = unL + 2*cL/(gammad - 1);
 
@@ -355,7 +348,6 @@ void OutflowFlux(const double UL[4], const double n[2],
     double ub = uL - unL*n[0] + unb*n[0];
     double vb = vL - unL*n[1] + unb*n[1];
 
-
     double Ub[4];
     Ub[0] = rhob;
     Ub[1] = rhob * ub;
@@ -365,7 +357,6 @@ void OutflowFlux(const double UL[4], const double n[2],
     FluxFunction(UL, Ub, n, gammad, Fhat, smag);
 }
 
-// test use
 void OutflowFlux_compute_Ub(const double UL[4], const double n[2], double pout,
                             double gammad, double Ub[4]) {
     double rhoL, uL, vL, pL, cL;

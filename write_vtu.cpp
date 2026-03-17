@@ -1,5 +1,7 @@
 #include "write_vtu.hpp"
 #include "physics.hpp"
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -13,31 +15,79 @@ extern "C" {
     void shapeL(double* xref, int p, double** pphi);
 }
 
-/* ---------- helpers --------------------------------------------------- */
-
 static void make_dirs(const std::string& path)
 {
     for (size_t i = 1; i <= path.size(); ++i) {
         if (i == path.size() || path[i] == '/') {
             std::string sub = path.substr(0, i);
-            mkdir(sub.c_str(), 0755);   /* ignore EEXIST */
+            mkdir(sub.c_str(), 0755);
         }
     }
 }
 
-/* ---------- main writer ----------------------------------------------- */
+static void quadratic_edge_point(const GriMesh& mesh, int n0, int n1, int nm, double t,
+                                 double& x, double& y)
+{
+    const double x0 = mesh.V[n0 * 2 + 0], y0 = mesh.V[n0 * 2 + 1];
+    const double x1 = mesh.V[n1 * 2 + 0], y1 = mesh.V[n1 * 2 + 1];
+    const double xm = mesh.V[nm * 2 + 0], ym = mesh.V[nm * 2 + 1];
+
+    const double N0 = (1.0 - t) * (1.0 - 2.0 * t);
+    const double Nm = 4.0 * t * (1.0 - t);
+    const double N1 = t * (2.0 * t - 1.0);
+
+    x = N0 * x0 + Nm * xm + N1 * x1;
+    y = N0 * y0 + Nm * ym + N1 * y1;
+}
+
+static void linear_edge_point(const GriMesh& mesh, int n0, int n1, double t,
+                              double& x, double& y)
+{
+    const double x0 = mesh.V[n0 * 2 + 0], y0 = mesh.V[n0 * 2 + 1];
+    const double x1 = mesh.V[n1 * 2 + 0], y1 = mesh.V[n1 * 2 + 1];
+    x = (1.0 - t) * x0 + t * x1;
+    y = (1.0 - t) * y0 + t * y1;
+}
+
+static int visualization_subdivisions(int order)
+{
+    switch (order) {
+        case 0: return 3;
+        case 1: return 4;
+        case 2: return 6;
+        case 3: return 8;
+        default:
+            return std::max(order + 1, 8);
+    }
+}
+
+static std::string lower_copy(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
+static bool has_token(const std::string& s, const char* token)
+{
+    return s.find(token) != std::string::npos;
+}
+
+static bool is_blade_boundary_name(const std::string& bname_raw)
+{
+    std::string bname = lower_copy(bname_raw);
+    if (bname == "bgroup2" || bname == "bgroup6") return true;
+
+    return has_token(bname, "blade") || has_token(bname, "wall") || has_token(bname, "solid");
+}
 
 void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
                         const ProblemParams& params, const std::string& filepath)
 {
     const int Np     = (order + 1) * (order + 2) / 2;
-    const int n_ref  = order + 1;           /* subdivision level */
+    const int n_ref  = visualization_subdivisions(order);
     const double h   = 1.0 / n_ref;
 
-    /* ---- Build uniform sub-grid on reference triangle ----------------
-     *  Vertices at (i*h, j*h) for i,j >= 0, i+j <= n_ref.
-     *  Index stored in vtx_flat[i][j].
-     */
     std::vector<std::vector<int>> vtx_flat(n_ref + 1,
                                            std::vector<int>(n_ref + 1, -1));
     std::vector<double> sv_xi, sv_eta;
@@ -49,17 +99,16 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
             sv_eta.push_back(j * h);
         }
 
-    int n_sv = (int)sv_xi.size();   /* (n_ref+1)*(n_ref+2)/2 */
+    int n_sv = (int)sv_xi.size();
 
-    /* ---- Build sub-triangle connectivity (CCW orientation) ----------- */
     std::vector<int> tv0, tv1, tv2;
     for (int j = 0; j < n_ref; ++j) {
         for (int i = 0; i < n_ref - j; ++i) {
-            /* upward-pointing */
+
             tv0.push_back(vtx_flat[i    ][j    ]);
             tv1.push_back(vtx_flat[i + 1][j    ]);
             tv2.push_back(vtx_flat[i    ][j + 1]);
-            /* downward-pointing (exists when i+j+1 < n_ref) */
+
             if (i + j + 1 < n_ref) {
                 tv0.push_back(vtx_flat[i + 1][j    ]);
                 tv1.push_back(vtx_flat[i + 1][j + 1]);
@@ -67,12 +116,39 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
             }
         }
     }
-    int n_st = (int)tv0.size();   /* n_ref^2 */
+    int n_st = (int)tv0.size();
 
     long total_pts   = (long)mesh.Ne * n_sv;
     long total_cells = (long)mesh.Ne * n_st;
 
-    /* ---- Precompute Lagrange basis at sub-vertices (same for all elements) */
+    std::vector<int> curved_mid(mesh.Ne * 3, -1);
+    std::vector<char> blade_face(mesh.Ne * 3, 0);
+    if ((int)mesh.BedgeNodeOffset.size() == mesh.num_boundary_faces + 1) {
+        for (int ib = 0; ib < mesh.num_boundary_faces; ++ib) {
+            int start = mesh.BedgeNodeOffset[(size_t)ib];
+            int nnode = mesh.BedgeNodeOffset[(size_t)ib + 1] - start;
+            int elem = mesh.B2E[3 * ib + 0];
+            int face = mesh.B2E[3 * ib + 1];
+            int bgroup = mesh.B2E[3 * ib + 2];
+            const int* tri = &mesh.E[elem * 3];
+            int n0 = tri[face];
+            int n1 = tri[(face + 1) % 3];
+
+            if (bgroup >= 1 && (size_t)bgroup <= mesh.Bname.size()) {
+                if (is_blade_boundary_name(mesh.Bname[(size_t)bgroup - 1])) {
+                    blade_face[elem * 3 + face] = 1;
+                }
+            }
+
+            if (nnode != 3) continue;
+
+            if (mesh.BedgeNodes[(size_t)start + 0] == n0 &&
+                mesh.BedgeNodes[(size_t)start + 1] == n1) {
+                curved_mid[elem * 3 + face] = mesh.BedgeNodes[(size_t)start + 2];
+            }
+        }
+    }
+
     std::vector<std::vector<double>> phi_sv(n_sv, std::vector<double>(Np));
     {
         double* buf = nullptr;
@@ -85,22 +161,31 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
         if (buf) free(buf);
     }
 
-    /* ---- Evaluate primitive fields at every (element, sub-vertex) ---- */
-    /* Layout: field[k * n_sv + v] */
     std::vector<double> f_rho  (mesh.Ne * n_sv);
     std::vector<double> f_u    (mesh.Ne * n_sv);
     std::vector<double> f_v    (mesh.Ne * n_sv);
     std::vector<double> f_p    (mesh.Ne * n_sv);
     std::vector<double> f_mach (mesh.Ne * n_sv);
-    std::vector<double> f_entr (mesh.Ne * n_sv);   /* s/s_ref = (p/rho^g) / s_ref */
+    std::vector<double> f_entr (mesh.Ne * n_sv);
+    std::vector<double> f_blade(mesh.Ne * n_sv, 0.0);
 
-    /* Reference entropy from freestream */
     const double s_ref = params.a0 * params.a0 / (params.gammad *
                          std::pow(params.rho0, params.gammad - 1.0));
 
     for (int k = 0; k < mesh.Ne; ++k) {
         for (int v = 0; v < n_sv; ++v) {
-            /* Interpolate conservative state at this sub-vertex */
+            const double xi  = sv_xi[v];
+            const double eta = sv_eta[v];
+            const double L0 = 1.0 - xi - eta;
+            const double L1 = xi;
+            const double L2 = eta;
+            const double tol_edge = 1e-12;
+
+            bool on_blade = false;
+            if (blade_face[k * 3 + 0] && std::fabs(L2) <= tol_edge) on_blade = true;
+            if (blade_face[k * 3 + 1] && std::fabs(L0) <= tol_edge) on_blade = true;
+            if (blade_face[k * 3 + 2] && std::fabs(L1) <= tol_edge) on_blade = true;
+
             double Uk[4] = {0, 0, 0, 0};
             for (int var = 0; var < 4; ++var)
                 for (int j = 0; j < Np; ++j)
@@ -121,10 +206,10 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
             f_p   [idx] = p;
             f_mach[idx] = mach;
             f_entr[idx] = entr;
+            f_blade[idx] = on_blade ? 1.0 : 0.0;
         }
     }
 
-    /* ---- Create output directory and open file ----------------------- */
     {
         size_t slash = filepath.find_last_of('/');
         if (slash != std::string::npos)
@@ -137,7 +222,6 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
         return;
     }
 
-    /* ---- VTK XML header --------------------------------------------- */
     out << "<?xml version=\"1.0\"?>\n"
         << "<VTKFile type=\"UnstructuredGrid\" version=\"0.1\""
         <<         " byte_order=\"LittleEndian\">\n"
@@ -145,7 +229,6 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
         << "    <Piece NumberOfPoints=\"" << total_pts
         << "\" NumberOfCells=\"" << total_cells << "\">\n";
 
-    /* ---- Points (physical coordinates) ------------------------------ */
     out << "      <Points>\n"
         << "        <DataArray type=\"Float64\" NumberOfComponents=\"3\""
         <<                   " format=\"ascii\">\n";
@@ -156,18 +239,57 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
         double x0 = mesh.V[n0 * 2], y0 = mesh.V[n0 * 2 + 1];
         double x1 = mesh.V[n1 * 2], y1 = mesh.V[n1 * 2 + 1];
         double x2 = mesh.V[n2 * 2], y2 = mesh.V[n2 * 2 + 1];
-        /* Physical: (x,y) = (x0,y0) + xi*(x1-x0,y1-y0) + eta*(x2-x0,y2-y0) */
+
         for (int v = 0; v < n_sv; ++v) {
             double xi  = sv_xi[v], eta = sv_eta[v];
             double xp  = x0 + xi * (x1 - x0) + eta * (x2 - x0);
             double yp  = y0 + xi * (y1 - y0) + eta * (y2 - y0);
+
+            const double L0 = 1.0 - xi - eta;
+            const double L1 = xi;
+            const double L2 = eta;
+            const double eps = 1e-14;
+
+            auto add_face_correction = [&](int face, int mid_node) {
+                if (mid_node < 0) return;
+
+                int a, b;
+                double den, t;
+                if (face == 0) {
+                    a = n0; b = n1;
+                    den = L0 + L1;
+                    if (den <= eps) return;
+                    t = L1 / den;
+                } else if (face == 1) {
+                    a = n1; b = n2;
+                    den = L1 + L2;
+                    if (den <= eps) return;
+                    t = L2 / den;
+                } else {
+                    a = n2; b = n0;
+                    den = L2 + L0;
+                    if (den <= eps) return;
+                    t = L0 / den;
+                }
+
+                t = std::min(1.0, std::max(0.0, t));
+                double xc, yc, xl, yl;
+                quadratic_edge_point(mesh, a, b, mid_node, t, xc, yc);
+                linear_edge_point(mesh, a, b, t, xl, yl);
+                xp += den * (xc - xl);
+                yp += den * (yc - yl);
+            };
+
+            add_face_correction(0, curved_mid[k * 3 + 0]);
+            add_face_correction(1, curved_mid[k * 3 + 1]);
+            add_face_correction(2, curved_mid[k * 3 + 2]);
+
             out << "          " << xp << " " << yp << " 0\n";
         }
     }
     out << "        </DataArray>\n"
         << "      </Points>\n";
 
-    /* ---- Cells ------------------------------------------------------ */
     out << "      <Cells>\n";
 
     out << "        <DataArray type=\"Int64\" Name=\"connectivity\""
@@ -190,12 +312,11 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
     out << "        <DataArray type=\"UInt8\" Name=\"types\""
         <<                   " format=\"ascii\">\n";
     for (long c = 0; c < total_cells; ++c)
-        out << "          5\n";   /* VTK_TRIANGLE */
+        out << "          5\n";
     out << "        </DataArray>\n";
 
     out << "      </Cells>\n";
 
-    /* ---- PointData fields ------------------------------------------- */
     out << "      <PointData>\n";
 
     auto write_scalar = [&](const char* name, const std::vector<double>& field) {
@@ -213,8 +334,8 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
     write_scalar("p",       f_p);
     write_scalar("Mach",    f_mach);
     write_scalar("entropy", f_entr);
+    write_scalar("blade_marker", f_blade);
 
-    /* Velocity as a vector (3-component: u, v, 0) */
     out << "        <DataArray type=\"Float64\" Name=\"velocity\""
         <<                   " NumberOfComponents=\"3\" format=\"ascii\">\n";
     for (int k = 0; k < mesh.Ne; ++k)
@@ -226,7 +347,6 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
 
     out << "      </PointData>\n";
 
-    /* ---- Footer ----------------------------------------------------- */
     out << "    </Piece>\n"
         << "  </UnstructuredGrid>\n"
         << "</VTKFile>\n";
