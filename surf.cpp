@@ -272,7 +272,7 @@ static DGBcType classify_boundary_name(const std::string& name_raw) {
 
 void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
                     const double* U, const ProblemParams& params, FluxFn flux_fn,
-										std::vector<double>& sum_s) {
+										std::vector<double>& sum_s, bool in_ptb, const double t) {
 	int Np = (order + 1) * (order + 2) / 2;
 	QuadratureRule quad1d = getQuadratureRule1D(order);
 
@@ -300,11 +300,11 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 			DGBcType bctype = classify_boundary_name(bname);
 
 			for (int q = 0; q < quad1d.nq; ++q) {
-				double t = quad1d.xq[q];
+				double tq = quad1d.xq[q];
 				double w = quad1d.wq[q] * L;
 
 				double xi, eta;
-				faceRefCoords(face, t, xi, eta);
+				faceRefCoords(face, tq, xi, eta);
 				double xref[2] = {xi, eta};
 
 				// Interpolate UL at (xi, eta)
@@ -320,20 +320,33 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 				double Fhat[4], smag_q;
 				if (bctype == DGBcType::WALL) {
 					WallFlux(UL, n, params.gammad, Fhat, smag_q);
-				} else if (bctype == DGBcType::INFLOW) {
+				}
+				else if (bctype == DGBcType::INFLOW) {
+					double rho0_in = params.rho0;
+					if (in_ptb) {
+						double x_phys, y_phys;
+						facePhysCoords(mesh, elem, face, tq, x_phys, y_phys);
+						double y_rot = y_phys;
+						double ystator = y_rot + params.Vrot * t;
+						double eta = ystator/params.delta_y - std::floor(ystator/params.delta_y) - 0.5;
+						double fac = 1.0 - params.fwake * std::exp(-eta * eta / (2.0 * params.delta_wake * params.delta_wake));
+						rho0_in = params.rho0 * fac;
+					}
 					try {
-						InflowFlux(UL, n, nin, params.rho0, params.a0, params.gammad, R_gas, flux_fn, Fhat, smag_q);
+						InflowFlux(UL, n, nin, rho0_in, params.a0, params.gammad, R_gas, flux_fn, Fhat, smag_q);
 					} catch (const std::exception&) {
 						// Interior state is unphysical during early iteration; use zero-dissipation fallback.
 						flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
 					}
-				} else if (bctype == DGBcType::OUTFLOW) {
+				}
+				else if (bctype == DGBcType::OUTFLOW) {
 					try {
 						OutflowFlux(UL, n, params.pout, params.gammad, flux_fn, Fhat, smag_q);
 					} catch (const std::exception&) {
 						flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
 					}
-				} else {
+				}
+				else {
 					// Freestream test behavior: ghost state equals interior state.
 					flux_fn(UL, UL, n, params.gammad, Fhat, smag_q);
 				}

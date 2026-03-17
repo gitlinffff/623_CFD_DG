@@ -19,8 +19,10 @@ void calcRes(const GriMesh& mesh,
 						 const ProblemParams& params,
 						 FluxFn flux_fn,
 						 double CFL,
-						 double* dt_local, // Size: mesh.Ne
-						 double& dt_global)
+						 double* dt_loc, // Size: mesh.Ne
+						 double& dt_glb,
+						 bool in_ptb,
+						 const double t)
 {
 	const int Np = (order + 1) * (order + 2) / 2;
 
@@ -42,26 +44,26 @@ void calcRes(const GriMesh& mesh,
 	// Interior faces
 	addSurfTerm(mesh, R, order, U, params, flux_fn, sum_s);
 
-	// Boundary faces: same BC interpretation as FV solver
-	addBndSurfTerm(mesh, R, order, U, params, flux_fn, sum_s);
+	// Boundary faces
+	addBndSurfTerm(mesh, R, order, U, params, flux_fn, sum_s, in_ptb, t);
 
-	// Calculate dt_local and dt_global
-	dt_global = 1.e20; // Initialize with large value
-	#pragma omp parallel for schedule(static) reduction(min:dt_global)
+	// Calculate dt_loc and dt_glb
+	dt_glb = 1.e20; // Initialize with large value
+	#pragma omp parallel for schedule(static) reduction(min:dt_glb)
 	for (int k = 0; k < mesh.Ne; ++k) {
 		double Ak = mesh.Area[k];
 
 		double denominator = sum_s[k] * (2 * order + 1);
 		
 		if (denominator > 1e-15) {
-			dt_local[k] = (CFL * 2.0 * Ak) / sum_s[k] / (2 * order + 1);
+			dt_loc[k] = (CFL * 2.0 * Ak) / sum_s[k] / (2 * order + 1);
 			// The (2p + 1) factor is for DG stability
 		} else {
-			dt_local[k] = 1e-6; // Safety fallback
+			dt_loc[k] = 1e-6; // Safety fallback
 		}
-		if (dt_local[k] < dt_global) {dt_global = dt_local[k];}
+		if (dt_loc[k] < dt_glb) {dt_glb = dt_loc[k];}
 	}
-	if (dt_global >= 1.e20) {
+	if (dt_glb >= 1.e20) {
 		throw std::runtime_error("Global minimum dt calculation failed.");
 	}
 }
@@ -87,17 +89,23 @@ void solve(const GriMesh& mesh,
 					 double CFL,
 					 int residual_stride,
 					 int max_iter,
-					 bool use_local_dt)
+					 bool use_local_dt,
+					 bool in_ptb)
 {
+	if (in_ptb && use_local_dt) {
+			throw std::runtime_error(
+					"Must use global time stepping when inflow unsteady perturbation is on.");
+	}
+
 	const int Np = (order + 1) * (order + 2) / 2;
 	const double gammad = params.gammad;
 
 	std::vector<double> R(4 * mesh.Ne * Np);
 	std::vector<double> U1(4 * mesh.Ne * Np);
 	std::vector<double> U2(4 * mesh.Ne * Np);
-	std::vector<double> dt_local(mesh.Ne);
-	std::vector<double> dt_dummy(mesh.Ne);
-	double dt_global, dt_global_dummy;
+	std::vector<double> dt_loc(mesh.Ne);
+	std::vector<double> dt_dmy(mesh.Ne); // dt_dummy
+	double dt_glb, dt_gdmy; // dt_global_dummy
 
 	double R0;
 	double t = 0.0;
@@ -105,7 +113,7 @@ void solve(const GriMesh& mesh,
 
 	while (step < max_iter) {
 		// calculate residuals at current state
-		calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_local.data(), dt_global);
+		calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_loc.data(), dt_glb, in_ptb, t);
 		
 		if (residual_stride > 0 && step % residual_stride == 0) {
 			double R1 = residual_L1_norm(mesh, R.data(), order);
@@ -121,8 +129,8 @@ void solve(const GriMesh& mesh,
 		}
 	
 		auto get_dt = [&](int k) {
-			return use_local_dt ? dt_local[k] : dt_global;
-		}; // an internal function to determine if dt_local or dt_global to use
+			return use_local_dt ? dt_loc[k] : dt_glb;
+		}; // an internal function to determine if dt_loc or dt_glb to use
 
 		// SSP-RK3 stage 1: U1_k = U_k - dt_k * M_k^{-1} R_k
 		applyInverseMassMatrix(mesh, R.data(), order);
@@ -137,7 +145,7 @@ void solve(const GriMesh& mesh,
 		}
 
 		// stage 2: U2_k = 0.75 U_k + 0.25 (U1_k - dt_k * M_k^{-1} R1_k)
-		calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
+		calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dmy.data(), dt_gdmy, in_ptb, t+dt_glb);
 		applyInverseMassMatrix(mesh, R.data(), order);
 		#pragma omp parallel for schedule(static)
 		for (int k = 0; k < mesh.Ne; ++k) {
@@ -150,7 +158,7 @@ void solve(const GriMesh& mesh,
 		}
 
 		// stage 3: U_k = 1/3 U_k + 2/3 (U2_k - dt_k * M_k^{-1} R2_k)
-		calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
+		calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dmy.data(), dt_gdmy, in_ptb, t+0.5*dt_glb);
 		applyInverseMassMatrix(mesh, R.data(), order);
 		#pragma omp parallel for schedule(static)
 		for (int k = 0; k < mesh.Ne; ++k) {
@@ -162,7 +170,7 @@ void solve(const GriMesh& mesh,
 			}
 		}
 
-		t += dt_global; // t represents physical time for global time stepping
+		t += dt_glb; // t represents physical time for global time stepping
 		++step;
 	}
 }

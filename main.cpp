@@ -35,6 +35,7 @@ int main() {
     const int max_iter = input.max_iter;
     const int print_interval = input.print_interval;
     const bool use_local_dt = input.use_local_dt;
+		const bool in_ptb = input.in_ptb;
 
     /* ---- Load mesh ---- */
     GriMesh mesh;
@@ -48,8 +49,9 @@ int main() {
               << "  Nf_bnd=" << mesh.num_boundary_faces << "\n";
     std::cout << "Order p=" << order
               << "  CFL=" << CFL
-							<< "  Flux=" << input.flux
-							<< "  local_dt or not = " << use_local_dt << "\n";
+							<< "  Flux=" << input.flux << "\n";
+		std::cout << "local_dt or not = " << use_local_dt << "\n";
+		std::cout << "unsteady inflow perturb = " << in_ptb << "\n";
 
     /* ---- Initialize solution to uniform freestream ---- */
     ProblemParams params;
@@ -72,7 +74,7 @@ int main() {
 
     /* ---- Solve to steady state ---- */
     solve(mesh, U.data(), order, params, flux_fn,
-                 CFL, print_interval, max_iter, use_local_dt);
+                 CFL, print_interval, max_iter, use_local_dt, in_ptb);
 
     /* ---- Write converged solution to ParaView VTU ---- */
     std::string case_name = stem(gri_file) + "_p" + std::to_string(order);

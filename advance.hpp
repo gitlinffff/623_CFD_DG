@@ -30,7 +30,9 @@ void calcRes(const GriMesh& mesh,
              FluxFn flux_fn,
              double CFL,
              double* dt_local, // Size: mesh.Ne
-             double& dt_global);
+             double& dt_global,
+             bool in_ptb,
+             const double t);
 
 
 /** L1 norm of DG residual over all variables/elements/basis functions. */
@@ -52,6 +54,7 @@ void solve(const GriMesh& mesh,
                   double CFL = 0.5,
                   int residual_stride = 50,
                   int max_iter = 1000000,
-									bool use_local_dt = false);
+                  bool use_local_dt = false,
+                  bool in_ptb = false);
 
 #endif

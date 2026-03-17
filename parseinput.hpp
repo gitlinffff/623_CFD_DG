@@ -8,6 +8,7 @@ struct InputParams {
     int max_iter = 10000;
     int print_interval = 100;
     bool use_local_dt = false;
+		bool in_ptb = false;
 		std::string flux = "HLLE";
 };
 

@@ -21,6 +21,7 @@ bool read_input_file(const std::string& file, InputParams& p)
             else if (key=="max_iter")       p.max_iter = std::stoi(val);
             else if (key=="print_interval") p.print_interval = std::stoi(val);
             else if (key=="use_local_dt")   p.use_local_dt = std::stoi(val);
+            else if (key=="inflow_perturb") p.in_ptb = std::stoi(val);
 						else if (key=="flux")           p.flux = val;
         }
     }
