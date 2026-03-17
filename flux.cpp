@@ -183,6 +183,45 @@ void fluxROE(const double UL[4], const double UR[4], const double n[2], double g
 }
 
 
+void fluxHLLE(const double UL[4], const double UR[4], const double n[2], double gammad,
+          double Fhat[4], double& smag) {
+    double rhoL, uL, vL, pL, cL;
+    double rhoR, uR, vR, pR, cR;
+    consToPrim(UL, gammad, rhoL, uL, vL, pL, cL);
+    consToPrim(UR, gammad, rhoR, uR, vR, pR, cR);
+
+    double nx = n[0];
+    double ny = n[1];
+
+    double unL = uL * nx + vL * ny;
+    double unR = uR * nx + vR * ny;
+
+    double SL = std::min(unL - cL, unR - cR);
+    double SR = std::max(unL + cL, unR + cR);
+    smag = std::max(std::abs(SL), std::abs(SR));
+
+    double FL[4], FR[4];
+    physicalFlux(UL, n, gammad, FL);
+    physicalFlux(UR, n, gammad, FR);
+
+    if (SL >= 0.0) {
+        for (int k = 0; k < 4; ++k)
+            Fhat[k] = FL[k];
+        return;
+    }
+    if (SR <= 0.0) {
+        for (int k = 0; k < 4; ++k)
+            Fhat[k] = FR[k];
+        return;
+    }
+
+    double dS = SR - SL;
+    if (std::abs(dS) < eps) dS = eps;
+    for (int k = 0; k < 4; ++k)
+        Fhat[k] = (SR * FL[k] - SL * FR[k] + SL * SR * (UR[k] - UL[k])) / dS;
+}
+
+
 void WallFlux(const double UL[4], const double n[2], double gammad,
          double Fhat[4], double& smag){
     double rhoL, uL, vL, pL, cL;

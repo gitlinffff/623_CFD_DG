@@ -5,6 +5,7 @@
 #include <utility>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 
 namespace {
 
@@ -13,7 +14,6 @@ using EdgeKey = std::pair<int, int>;
 struct VisitedEntry {
     int elemL;   /* 0-based */
     int faceL;   /* 0-based local face */
-    bool aligned;
 };
 
 bool read_line_ints(std::ifstream& f, int* out, int n) {
@@ -36,6 +36,39 @@ bool read_line_doubles(std::ifstream& f, double* out, int n) {
 
 double norm2(double x, double y) {
     return std::sqrt(x * x + y * y);
+}
+
+void face_outward_normal(const GriMesh& mesh, int elem, int face,
+                         double& nx, double& ny, double& len) {
+    const int* tri = &mesh.E[elem * 3];
+    int n0 = tri[face];
+    int n1 = tri[(face + 1) % 3];
+    int n2 = tri[(face + 2) % 3];
+
+    double x0 = mesh.V[n0 * 2 + 0], y0 = mesh.V[n0 * 2 + 1];
+    double x1 = mesh.V[n1 * 2 + 0], y1 = mesh.V[n1 * 2 + 1];
+    double x2 = mesh.V[n2 * 2 + 0], y2 = mesh.V[n2 * 2 + 1];
+
+    double ex = x1 - x0;
+    double ey = y1 - y0;
+    len = norm2(ex, ey);
+    if (len < 1e-20) len = 1e-20;
+    ex /= len;
+    ey /= len;
+
+    nx = ey;
+    ny = -ex;
+
+    // Enforce outward orientation with respect to element centroid.
+    double mx = 0.5 * (x0 + x1);
+    double my = 0.5 * (y0 + y1);
+    double cx = (x0 + x1 + x2) / 3.0;
+    double cy = (y0 + y1 + y2) / 3.0;
+    double dot = nx * (mx - cx) + ny * (my - cy);
+    if (dot < 0.0) {
+        nx = -nx;
+        ny = -ny;
+    }
 }
 
 }  // namespace
@@ -105,6 +138,25 @@ bool read_gri(const char* fname, GriMesh& mesh) {
                 mesh.E[(Ne0 + n) * 3 + k]--;
         }
         Ne0 += ne;
+    }
+
+    // Ensure a consistent CCW local-node ordering for every triangle.
+    // This guarantees that boundary normals built from local edges point
+    // outward and keeps face orientation logic robust on all mesh levels.
+    const char* disable_ccw_fix = std::getenv("DG_DISABLE_CCW_FIX");
+    if (!(disable_ccw_fix && std::strcmp(disable_ccw_fix, "1") == 0)) {
+        for (int e = 0; e < mesh.Ne; ++e) {
+            int* tri = &mesh.E[e * 3];
+            double x1 = mesh.V[tri[0] * 2 + 0], y1 = mesh.V[tri[0] * 2 + 1];
+            double x2 = mesh.V[tri[1] * 2 + 0], y2 = mesh.V[tri[1] * 2 + 1];
+            double x3 = mesh.V[tri[2] * 2 + 0], y3 = mesh.V[tri[2] * 2 + 1];
+            double signed_twice_area = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
+            if (signed_twice_area < 0.0) {
+                int tmp = tri[1];
+                tri[1] = tri[2];
+                tri[2] = tmp;
+            }
+        }
     }
 
     int NPG;
@@ -181,24 +233,14 @@ bool read_gri(const char* fname, GriMesh& mesh) {
                         I2E.push_back(ve.faceL);
                         I2E.push_back(i);
                         I2E.push_back(j);
-                        double ex = mesh.V[end1 * 2 + 0] - mesh.V[end0 * 2 + 0];
-                        double ey = mesh.V[end1 * 2 + 1] - mesh.V[end0 * 2 + 1];
-                        double len = norm2(ex, ey);
-                        if (len < 1e-20) len = 1e-20;
-                        ex /= len; ey /= len;
-                        double nx = ey, ny = -ex;
-                        double ox = mesh.V[o1 * 2 + 0] - mesh.V[o0 * 2 + 0];
-                        double oy = mesh.V[o1 * 2 + 1] - mesh.V[o0 * 2 + 1];
-                        bool is_antiparallel = (ex * ox + ey * oy) < 0;
-                        bool flip = !ve.aligned;
-                        if (is_antiparallel) flip = !flip;
-                        if (flip) { nx = -nx; ny = -ny; }
+                        double nx, ny, len;
+                        face_outward_normal(mesh, ve.elemL, ve.faceL, nx, ny, len);
                         In.push_back(nx);
                         In.push_back(ny);
                         In_len.push_back(len);
                         visited.erase(itV);
                     } else {
-                        visited[faceID] = { i, j, na < nb };
+                        visited[faceID] = { i, j };
                     }
                 } else {
                     int bgroup = 1;
@@ -208,13 +250,10 @@ bool read_gri(const char* fname, GriMesh& mesh) {
                     B2E.push_back(i);
                     B2E.push_back(j);
                     B2E.push_back(bgroup);
-                    double ex = mesh.V[nb * 2 + 0] - mesh.V[na * 2 + 0];
-                    double ey = mesh.V[nb * 2 + 1] - mesh.V[na * 2 + 1];
-                    double len = norm2(ex, ey);
-                    if (len < 1e-20) len = 1e-20;
-                    ex /= len; ey /= len;
-                    Bn.push_back(ey);
-                    Bn.push_back(-ex);
+                    double nx, ny, len;
+                    face_outward_normal(mesh, i, j, nx, ny, len);
+                    Bn.push_back(nx);
+                    Bn.push_back(ny);
                     Bn_len.push_back(len);
                 }
             } else {
@@ -225,19 +264,14 @@ bool read_gri(const char* fname, GriMesh& mesh) {
                     I2E.push_back(ve.faceL);
                     I2E.push_back(i);
                     I2E.push_back(j);
-                    double ex = mesh.V[end1 * 2 + 0] - mesh.V[end0 * 2 + 0];
-                    double ey = mesh.V[end1 * 2 + 1] - mesh.V[end0 * 2 + 1];
-                    double len = norm2(ex, ey);
-                    if (len < 1e-20) len = 1e-20;
-                    ex /= len; ey /= len;
-                    double nx = ey, ny = -ex;
-                    if (!ve.aligned) { nx = -nx; ny = -ny; }
+                    double nx, ny, len;
+                    face_outward_normal(mesh, ve.elemL, ve.faceL, nx, ny, len);
                     In.push_back(nx);
                     In.push_back(ny);
                     In_len.push_back(len);
                     visited.erase(itV);
                 } else {
-                    visited[faceID] = { i, j, na < nb };
+                    visited[faceID] = { i, j };
                 }
             }
         }

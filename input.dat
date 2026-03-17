@@ -1,0 +1,8 @@
+order=2
+CFL=0.4
+gri_file=mesh/global_refine_0.gri
+max_iter=1000000
+print_interval=200
+use_local_dt=1
+flux=HLLC
+restart_file=results/steady/global_refine_0_p1/restart.dat

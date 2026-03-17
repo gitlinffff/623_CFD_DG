@@ -10,6 +10,9 @@ void fluxHLLC(const double UL[4], const double UR[4], const double n[2], double 
 void fluxROE(const double UL[4], const double UR[4], const double n[2], double gammad,
          double Fhat[4], double& smag);
 
+void fluxHLLE(const double UL[4], const double UR[4], const double n[2], double gammad,
+          double Fhat[4], double& smag);
+
 /** Wall flux: F·n = [0, p*nx, p*ny, 0] (slip, un=0) */
 void WallFlux(const double UL[4], const double n[2], double gammad,
               double Fhat[4], double& smag);

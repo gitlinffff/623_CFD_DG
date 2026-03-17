@@ -10,9 +10,11 @@ void addTerm2(const GriMesh& mesh, double* R, int order,
 	int Np = (order + 1) * (order + 2) / 2;
 	QuadratureRule quad = getQuadratureRule(order);
 
+	// Each element k writes exclusively to R[(var*Ne+k)*Np+i], so no race conditions.
+	#pragma omp parallel for schedule(static)
 	for (int k = 0; k < mesh.Ne; ++k) {
 		Eigen::Matrix2d J = Jacobian(mesh, k);
-		double detJ = J.determinant();
+		double detJ = abs(J.determinant());
 		Eigen::Matrix2d J_inv = J.inverse();
 
 		for (int q = 0; q < quad.nq; ++q) {
