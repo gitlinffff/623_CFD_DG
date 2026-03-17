@@ -73,12 +73,18 @@ static bool has_token(const std::string& s, const char* token)
     return s.find(token) != std::string::npos;
 }
 
-static bool is_blade_boundary_name(const std::string& bname_raw)
+static bool is_top_wall_name(const std::string& bname_raw)
 {
     std::string bname = lower_copy(bname_raw);
-    if (bname == "bgroup2" || bname == "bgroup6") return true;
+    if (bname == "bgroup2") return true;
+    return has_token(bname, "top") || has_token(bname, "upper");
+}
 
-    return has_token(bname, "blade") || has_token(bname, "wall") || has_token(bname, "solid");
+static bool is_bottom_wall_name(const std::string& bname_raw)
+{
+    std::string bname = lower_copy(bname_raw);
+    if (bname == "bgroup6") return true;
+    return has_token(bname, "bottom") || has_token(bname, "lower");
 }
 
 void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
@@ -122,7 +128,7 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
     long total_cells = (long)mesh.Ne * n_st;
 
     std::vector<int> curved_mid(mesh.Ne * 3, -1);
-    std::vector<char> blade_face(mesh.Ne * 3, 0);
+    std::vector<int> wall_face_mark(mesh.Ne * 3, 0);
     if ((int)mesh.BedgeNodeOffset.size() == mesh.num_boundary_faces + 1) {
         for (int ib = 0; ib < mesh.num_boundary_faces; ++ib) {
             int start = mesh.BedgeNodeOffset[(size_t)ib];
@@ -130,13 +136,17 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
             int elem = mesh.B2E[3 * ib + 0];
             int face = mesh.B2E[3 * ib + 1];
             int bgroup = mesh.B2E[3 * ib + 2];
+            const int local_edge_1based = face + 1;
             const int* tri = &mesh.E[elem * 3];
             int n0 = tri[face];
             int n1 = tri[(face + 1) % 3];
 
             if (bgroup >= 1 && (size_t)bgroup <= mesh.Bname.size()) {
-                if (is_blade_boundary_name(mesh.Bname[(size_t)bgroup - 1])) {
-                    blade_face[elem * 3 + face] = 1;
+                const std::string& bname = mesh.Bname[(size_t)bgroup - 1];
+                if (is_top_wall_name(bname)) {
+                    wall_face_mark[elem * 3 + face] = local_edge_1based;
+                } else if (is_bottom_wall_name(bname)) {
+                    wall_face_mark[elem * 3 + face] = -local_edge_1based;
                 }
             }
 
@@ -167,7 +177,7 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
     std::vector<double> f_p    (mesh.Ne * n_sv);
     std::vector<double> f_mach (mesh.Ne * n_sv);
     std::vector<double> f_entr (mesh.Ne * n_sv);
-    std::vector<double> f_blade(mesh.Ne * n_sv, 0.0);
+    std::vector<double> f_wall_marker(mesh.Ne * n_sv, 0.0);
 
     const double s_ref = params.a0 * params.a0 / (params.gammad *
                          std::pow(params.rho0, params.gammad - 1.0));
@@ -181,10 +191,16 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
             const double L2 = eta;
             const double tol_edge = 1e-12;
 
-            bool on_blade = false;
-            if (blade_face[k * 3 + 0] && std::fabs(L2) <= tol_edge) on_blade = true;
-            if (blade_face[k * 3 + 1] && std::fabs(L0) <= tol_edge) on_blade = true;
-            if (blade_face[k * 3 + 2] && std::fabs(L1) <= tol_edge) on_blade = true;
+            int wall_marker = 0;
+            if (wall_face_mark[k * 3 + 0] != 0 && std::fabs(L2) <= tol_edge) {
+                wall_marker = wall_face_mark[k * 3 + 0];
+            }
+            if (wall_face_mark[k * 3 + 1] != 0 && std::fabs(L0) <= tol_edge) {
+                if (wall_marker == 0) wall_marker = wall_face_mark[k * 3 + 1];
+            }
+            if (wall_face_mark[k * 3 + 2] != 0 && std::fabs(L1) <= tol_edge) {
+                if (wall_marker == 0) wall_marker = wall_face_mark[k * 3 + 2];
+            }
 
             double Uk[4] = {0, 0, 0, 0};
             for (int var = 0; var < 4; ++var)
@@ -206,7 +222,7 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
             f_p   [idx] = p;
             f_mach[idx] = mach;
             f_entr[idx] = entr;
-            f_blade[idx] = on_blade ? 1.0 : 0.0;
+            f_wall_marker[idx] = (double)wall_marker;
         }
     }
 
@@ -334,7 +350,7 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
     write_scalar("p",       f_p);
     write_scalar("Mach",    f_mach);
     write_scalar("entropy", f_entr);
-    write_scalar("blade_marker", f_blade);
+    write_scalar("wall_marker", f_wall_marker);
 
     out << "        <DataArray type=\"Float64\" Name=\"velocity\""
         <<                   " NumberOfComponents=\"3\" format=\"ascii\">\n";
