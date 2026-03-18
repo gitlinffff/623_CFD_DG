@@ -19,8 +19,10 @@ void calcRes(const GriMesh& mesh,
              const ProblemParams& params,
              FluxFn flux_fn,
              double CFL,
-             double* dt_local,
-             double& dt_global);
+             double* dt_loc,
+             double& dt_glb,
+						 bool in_ptb,
+						 const double t);
 
 double residual_L1_norm(const GriMesh& mesh,
                            const double* R,
@@ -35,6 +37,12 @@ void solve(const GriMesh& mesh,
                   int residual_stride = 50,
                   int max_iter = 1000000,
 									bool use_local_dt = false,
-                  const std::string& residual_history_file = "");
+									bool in_ptb = false,
+                  const std::string& residual_history_file = "",
+									const std::string& case_dir = "",
+									const double vtu_interval = 200.0,
+									const double dat_interval = 100.0,
+									const double t_final = 1.e9,
+									const std::string& mesh_file = "");
 
 #endif

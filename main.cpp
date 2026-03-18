@@ -55,6 +55,10 @@ int main() {
     const int max_iter = input.max_iter;
     const int print_interval = input.print_interval;
     const bool use_local_dt = input.use_local_dt;
+		const bool in_ptb = input.in_ptb;
+    const double vtu_interval = input.vtu_interval;
+    const double dat_interval = input.dat_interval;
+    const double t_final = input.t_final;
 
     GriMesh mesh;
     if (!read_gri(gri_file, mesh)) {
@@ -67,8 +71,9 @@ int main() {
               << "  Nf_bnd=" << mesh.num_boundary_faces << "\n";
     std::cout << "Order p=" << order
               << "  CFL=" << CFL
-							<< "  Flux=" << input.flux
-							<< "  local_dt or not = " << use_local_dt << "\n";
+              << "  Flux=" << input.flux << "\n";
+		std::cout << "local_dt or not = " << use_local_dt << "\n";
+		std::cout << "unsteady inflow perturb = " << in_ptb << "\n";
 
     ProblemParams params;
 
@@ -145,11 +150,13 @@ int main() {
     }
 
     std::string case_name = stem(gri_file) + "_p" + std::to_string(order);
-    std::string case_dir  = "results/steady/" + case_name;
+		std::string mode = in_ptb ? "unsteady" : "steady";
+    std::string case_dir  = "results/" + case_name + "/" + mode;
     std::string out_res   = case_dir + "/residual_history.dat";
 
     solve(mesh, U.data(), order, params, flux_fn,
-                 CFL, print_interval, max_iter, use_local_dt, out_res);
+          CFL, print_interval, max_iter, use_local_dt, in_ptb, out_res,
+          case_dir, vtu_interval, dat_interval, t_final, input.gri_file);
     std::cout << "Residual history written to: " << out_res << "\n";
 
     std::string out_vtu   = case_dir + "/solution.vtu";

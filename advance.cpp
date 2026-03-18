@@ -1,4 +1,6 @@
 #include "advance.hpp"
+#include "restart.hpp"
+#include "write_vtu.hpp"
 #include "mm.hpp"
 #include <cmath>
 #include <cstring>
@@ -27,8 +29,10 @@ void calcRes(const GriMesh& mesh,
 						 const ProblemParams& params,
 						 FluxFn flux_fn,
 						 double CFL,
-						 double* dt_local,
-						 double& dt_global)
+						 double* dt_loc,
+						 double& dt_glb,
+						 bool in_ptb,
+						 const double t)
 {
 	const int Np = (order + 1) * (order + 2) / 2;
 
@@ -46,38 +50,35 @@ void calcRes(const GriMesh& mesh,
 
 	addSurfTerm(mesh, R, order, U, params, flux_fn, sum_s);
 
-	addBndSurfTerm(mesh, R, order, U, params, flux_fn, sum_s);
+	addBndSurfTerm(mesh, R, order, U, params, flux_fn, sum_s, in_ptb, t);
 
-	dt_global = 1.e20;
-	#pragma omp parallel for schedule(static) reduction(min:dt_global)
+	dt_glb = 1.e20;
+	#pragma omp parallel for schedule(static) reduction(min:dt_glb)
 	for (int k = 0; k < mesh.Ne; ++k) {
 		double Ak = mesh.Area[k];
 
 		double denominator = sum_s[k] * (2 * order + 1);
 
 		if (denominator > 1e-15) {
-			dt_local[k] = (CFL * 2.0 * Ak) / sum_s[k] / (2 * order + 1);
+			dt_loc[k] = (CFL * 2.0 * Ak) / sum_s[k] / (2 * order + 1);
 		} else {
-			dt_local[k] = 1e-6;
+			dt_loc[k] = 1e-6;
 		}
-		if (dt_local[k] < dt_global) {dt_global = dt_local[k];}
+		if (dt_loc[k] < dt_glb) {dt_glb = dt_loc[k];}
 	}
-	if (dt_global >= 1.e20) {
+	if (dt_glb >= 1.e20) {
 		throw std::runtime_error("Global minimum dt calculation failed.");
 	}
 }
 
-double residual_L1_norm(const GriMesh& mesh,
-                           const double* R,
-                           int order)
-{
-    const int Np = (order + 1) * (order + 2) / 2;
-    const int nTot = 4 * mesh.Ne * Np;
-    double sum = 0.0;
-    #pragma omp parallel for schedule(static) reduction(+:sum)
-    for (int i = 0; i < nTot; ++i)
-        sum += std::fabs(R[i]);
-    return sum;
+double residual_L1_norm(const GriMesh& mesh, const double* R, int order) {
+	const int Np = (order + 1) * (order + 2) / 2;
+	const int nTot = 4 * mesh.Ne * Np;
+	double sum = 0.0;
+	#pragma omp parallel for schedule(static) reduction(+:sum)
+	for (int i = 0; i < nTot; ++i)
+			sum += std::fabs(R[i]);
+	return sum;
 }
 
 void solve(const GriMesh& mesh,
@@ -89,21 +90,35 @@ void solve(const GriMesh& mesh,
 					 int residual_stride,
 					 int max_iter,
 					 bool use_local_dt,
-           const std::string& residual_history_file)
+					 bool in_ptb,
+           const std::string& residual_history_file,
+					 const std::string& case_dir,
+					 const double vtu_interval,
+					 const double dat_interval,
+					 const double t_final,
+					 const std::string& mesh_file)
 {
+	if (in_ptb && use_local_dt) {
+		throw std::runtime_error(
+			"Must use global time stepping when inflow unsteady perturbation is on.");
+	}
+
 	const int Np = (order + 1) * (order + 2) / 2;
 	const double gammad = params.gammad;
 
 	std::vector<double> R(4 * mesh.Ne * Np);
 	std::vector<double> U1(4 * mesh.Ne * Np);
 	std::vector<double> U2(4 * mesh.Ne * Np);
-	std::vector<double> dt_local(mesh.Ne);
-	std::vector<double> dt_dummy(mesh.Ne);
-	double dt_global, dt_global_dummy;
+	std::vector<double> dt_loc(mesh.Ne);
+	std::vector<double> dt_dmy(mesh.Ne); 
+	double dt_glb, dt_gdmy;
 
 	double R0 = -1.0;
 	double t = 0.0;
 	int step = 0;
+	double next_vtu_t = vtu_interval;
+	double next_dat_t = dat_interval;
+	std::vector<double> vtu_times;
 
 	std::ofstream history_out;
 	if (!residual_history_file.empty()) {
@@ -119,8 +134,8 @@ void solve(const GriMesh& mesh,
 		history_out << std::setprecision(17);
 	}
 
-	while (step < max_iter) {
-		calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_local.data(), dt_global);
+	while (step < max_iter && (!in_ptb || t < t_final - 1e-12)) {
+		calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_loc.data(), dt_glb, in_ptb, t);
 
 		if (residual_stride > 0 && step % residual_stride == 0) {
 			double R1 = residual_L1_norm(mesh, R.data(), order);
@@ -141,7 +156,7 @@ void solve(const GriMesh& mesh,
 		}
 
 		auto get_dt = [&](int k) {
-			return use_local_dt ? dt_local[k] : dt_global;
+			return use_local_dt ? dt_loc[k] : dt_glb;
 		};
 
 		applyInverseMassMatrix(mesh, R.data(), order);
@@ -155,7 +170,7 @@ void solve(const GriMesh& mesh,
 			}
 		}
 
-		calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
+		calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dmy.data(), dt_gdmy, in_ptb, t+dt_glb);
 		applyInverseMassMatrix(mesh, R.data(), order);
 		#pragma omp parallel for schedule(static)
 		for (int k = 0; k < mesh.Ne; ++k) {
@@ -167,7 +182,7 @@ void solve(const GriMesh& mesh,
 			}
 		}
 
-		calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
+		calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dmy.data(), dt_gdmy, in_ptb, t+0.5*dt_glb);
 		applyInverseMassMatrix(mesh, R.data(), order);
 		#pragma omp parallel for schedule(static)
 		for (int k = 0; k < mesh.Ne; ++k) {
@@ -179,7 +194,26 @@ void solve(const GriMesh& mesh,
 			}
 		}
 
-		t += dt_global;
+		t += dt_glb;
 		++step;
+
+		if (in_ptb) {
+			if (dat_interval > 0. && t >= next_dat_t - 1e-12) { // .dat output
+					char dat_path[256];
+					std::snprintf(dat_path, sizeof(dat_path), "%s/restart_t_%05.0f.dat", case_dir.c_str(), t);
+					write_restart_dat(dat_path, mesh, order, U, mesh_file);
+					next_dat_t += dat_interval;
+			}
+
+			if (vtu_interval > 0. && t >= next_vtu_t - 1e-12) { // .vtu output
+					char vtu_path[256];
+					std::snprintf(vtu_path, sizeof(vtu_path), "%s/solution_t_%05.0f.vtu", case_dir.c_str(), t);
+					write_solution_vtu(mesh, U, order, params, vtu_path);
+					vtu_times.push_back(t);
+					write_pvd_manifest(case_dir, vtu_times);
+					next_vtu_t += vtu_interval;
+			}
+		}
 	}
+	
 }

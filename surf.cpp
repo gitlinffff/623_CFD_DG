@@ -253,7 +253,7 @@ static DGBcType classify_boundary_name(const std::string& name_raw) {
 
 void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
                     const double* U, const ProblemParams& params, FluxFn flux_fn,
-											std::vector<double>& sum_s) {
+											std::vector<double>& sum_s, bool in_ptb, const double t) {
 	int Np = (order + 1) * (order + 2) / 2;
 	QuadratureRule quad1d_linear = getQuadratureRule1D(order);
 	int curved_quad_order = order + 1;
@@ -291,7 +291,7 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 				DGBcType bctype = classify_boundary_name(bname);
 
 				for (int q = 0; q < quad1d.nq; ++q) {
-					double t = quad1d.xq[q];
+					double tq = quad1d.xq[q];
 					double n_q[2];
 					double w = 0.0;
 					if (is_quadratic_curve) {
@@ -299,7 +299,7 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 						int n1 = mesh.BedgeNodes[(size_t)bedge_start + 1];
 						int nm = mesh.BedgeNodes[(size_t)bedge_start + 2];
 						double jac;
-						quadratic_edge_geom(mesh, n0, n1, nm, t, n_q[0], n_q[1], jac);
+						quadratic_edge_geom(mesh, n0, n1, nm, tq, n_q[0], n_q[1], jac);
 						w = quad1d.wq[q] * jac;
 					} else {
 						n_q[0] = mesh.Bn[2 * ib + 0];
@@ -309,7 +309,7 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 					edge_measure += w;
 
 					double xi, eta;
-					faceRefCoords(face, t, xi, eta);
+					faceRefCoords(face, tq, xi, eta);
 					double xref[2] = {xi, eta};
 
 				shapeL(xref, order, &phi);
@@ -324,19 +324,32 @@ void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
 					double Fhat[4], smag_q;
 					if (bctype == DGBcType::WALL) {
 						WallFlux(UL, n_q, params.gammad, Fhat, smag_q);
-					} else if (bctype == DGBcType::INFLOW) {
+					}
+					else if (bctype == DGBcType::INFLOW) {
+						double rho0_in = params.rho0;
+						if (in_ptb) {
+							double x_phys, y_phys;
+							facePhysCoords(mesh, elem, face, tq, x_phys, y_phys);
+							double y_rot = y_phys;
+							double ystator = y_rot + params.Vrot * t;
+							double eta = ystator/params.delta_y - std::floor(ystator/params.delta_y) - 0.5;
+							double fac = 1.0 - params.fwake * std::exp(-eta * eta / (2.0 * params.delta_wake * params.delta_wake));
+							rho0_in = params.rho0 * fac;
+						}
 						try {
-							InflowFlux(UL, n_q, nin, params.rho0, params.a0, params.gammad, R_gas, flux_fn, Fhat, smag_q);
+							InflowFlux(UL, n_q, nin, rho0_in, params.a0, params.gammad, R_gas, flux_fn, Fhat, smag_q);
 						} catch (const std::exception&) {
 							flux_fn(UL, UL, n_q, params.gammad, Fhat, smag_q);
 						}
-					} else if (bctype == DGBcType::OUTFLOW) {
+					}
+					else if (bctype == DGBcType::OUTFLOW) {
 						try {
 							OutflowFlux(UL, n_q, params.pout, params.gammad, flux_fn, Fhat, smag_q);
 						} catch (const std::exception&) {
 							flux_fn(UL, UL, n_q, params.gammad, Fhat, smag_q);
 						}
-					} else {
+					}
+					else {
 						flux_fn(UL, UL, n_q, params.gammad, Fhat, smag_q);
 					}
 					max_smag_edge = std::max(max_smag_edge, smag_q);
