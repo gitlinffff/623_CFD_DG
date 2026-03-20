@@ -1,140 +1,157 @@
 /**
- * Euler finite-volume solver - steady-state only.
- * Build: mkdir build && cd build && cmake .. && make
- * Usage: ./main
- * Output: data/results/solution.vtu
+ * DG solver main for the turbine blade passage.
+ *
+ * Edit the case parameters below and rebuild:
+ *   order    : DG polynomial order (0, 1, 2, 3)
+ *   CFL      : CFL number (recommend 0.4 for all orders)
+ *   gri_file : path to .gri mesh file
  */
-#include "solver.hpp"
+#include "advance.hpp"
+#include "readgri.hpp"
+#include "problem.hpp"
+#include "write_vtu.hpp"
+#include "parseinput.hpp"
+#include "restart.hpp"
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <string>
 #include <vector>
-#include <cstdio>
-#ifdef _WIN32
-#include <direct.h>
-#else
-#include <sys/stat.h>
-#endif
 
-static void ensure_dir(const char* path) {
-#ifdef _WIN32
-    (void)_mkdir(path);
-#else
-    (void)mkdir(path, 0755);
-#endif
+static std::string stem(const std::string& path)
+{
+    size_t slash = path.find_last_of("/\\");
+    std::string base = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    size_t dot = base.rfind('.');
+    return (dot == std::string::npos) ? base : base.substr(0, dot);
 }
 
-int run_steady(){
-	int order = 2;  /* DG order*/
-	int Np = (order + 1) * (order + 2) / 2;
-	double Mach = 0.1;
-	FluxFn flux_fn = fluxROE;
-  ProblemParams params;
-
-	const double t_end = 400;         /* run until periodic; adjust as needed */
-	const double vtu_interval = 0.2;	
-	const double CFL = 0.05;
-	const char* gri_file = "/home/linfel/umich_course/623_CFD/mesh/ver2/global_refine_3.gri";
-	const char* rst_file = "/home/linfel/umich_course/623_CFD/data/steady_results/refine3_2nd.vtu";
-	const char* out_dir =  "/home/linfel/umich_course/623_CFD/data/unsteady/1st_unsteady_rfn3_solutions";
-
-	GriMesh mesh;
-	if (!read_gri(gri_file, mesh)) {
-			std::cerr << "Failed to read mesh.\n";
-			return 1;
-	}
-
-	std::vector<double> U(4 * mesh.Ne * Np);
-	std::vector<double> R(4 * mesh.Ne * Np);
-	initialize_uniform(U.data(), mesh.Ne, order, Mach, params);
-  
-	// this unfinished
-	solve_steady(mesh, U.data(), gammad, params, flux_fn, recon_fn, CFL, 50, 1000000);
-	return 0;
+static std::string upper_copy(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return s;
 }
 
+int main() {
+    InputParams input;
 
-int rst_unsteady() {
-    /* restart unsteady run*/
-    const double gammad = 1.4;
-    FluxFn flux_fn = fluxROE;
-    ReconFn recon_fn = reconstruct_nolimiter;
+    if (!read_input_file("input.dat", input))
+        return 1;
 
-    const double t_end = 400;         /* run until periodic; adjust as needed */
-    const double vtu_interval = 0.2;	
-    const double CFL = 0.05;
-    const char* gri_file = "/home/linfel/umich_course/623_CFD/mesh/ver2/global_refine_3.gri";
-    const char* rst_file = "/home/linfel/umich_course/623_CFD/data/steady_results/refine3_2nd.vtu";
-    const char* out_dir =  "/home/linfel/umich_course/623_CFD/data/unsteady/1st_unsteady_rfn3_solutions";
+    const int order = input.order;
+    const double CFL = input.CFL;
+    const char* gri_file = input.gri_file.c_str();
+    const int max_iter = input.max_iter;
+    const int print_interval = input.print_interval;
+    const bool use_local_dt = input.use_local_dt;
+    const int checkpoint_interval = input.checkpoint_interval;
 
+    /* ---- Load mesh ---- */
     GriMesh mesh;
     if (!read_gri(gri_file, mesh)) {
-        std::cerr << "Failed to read mesh.\n";
+        std::cerr << "Failed to read mesh: " << gri_file << "\n";
         return 1;
     }
+    std::cout << "Mesh: " << gri_file
+              << "  Ne=" << mesh.Ne
+              << "  Nf_int=" << mesh.num_interior_faces
+              << "  Nf_bnd=" << mesh.num_boundary_faces << "\n";
+    std::cout << "Order p=" << order
+              << "  CFL=" << CFL
+							<< "  Flux=" << input.flux
+							<< "  local_dt or not = " << use_local_dt
+              << "  checkpoint_interval=" << checkpoint_interval << "\n";
 
-    ensure_dir(out_dir);
-
+    /* ---- Initialize solution to uniform freestream ---- */
     ProblemParams params;
-    std::vector<double> U(mesh.Ne * 4);
 
-    std::cout << "Mesh: " << mesh.Ne << " elements, "
-              << mesh.num_interior_faces << " interior, "
-              << mesh.num_boundary_faces << " boundary faces.\n";
-
-    if (!read_vtu(mesh, rst_file, gammad, U.data())) {
-        std::cerr << "Error: failed to read or mesh mismatch: " << rst_file << "\n";
+    FluxFn flux_fn;
+    const std::string flux_key = upper_copy(input.flux);
+    if (flux_key == "HLLE")
+        flux_fn = fluxHLLE;
+    else if (flux_key == "HLLC")
+        flux_fn = fluxHLLC;
+    else if (flux_key == "ROE")
+        flux_fn = fluxROE;
+    else if (flux_key == "RUSANOV")
+        flux_fn = fluxRusanov;
+    else {
+        std::cerr << "Unknown flux type: " << input.flux
+                  << ". Supported: HLLE, HLLC, Roe, Rusanov\n";
         return 1;
     }
-    std::cout << "Loaded: " << rst_file << "\n";
 
-    solve_unsteady(mesh, U.data(), gammad, params, flux_fn, recon_fn, CFL, t_end, vtu_interval, 50, out_dir);
+    const int Np = (order + 1) * (order + 2) / 2;
+    std::vector<double> U(4 * mesh.Ne * Np, 0.0);
+    if (!input.restart_file.empty()) {
+        RestartData restart_data;
+        if (!read_restart_dat(input.restart_file, restart_data)) {
+            std::cerr << "Failed to read restart file: " << input.restart_file << "\n";
+            return 1;
+        }
+        std::string restart_err;
+        bool use_cross_mesh = (restart_data.Ne != mesh.Ne);
+        if (!use_cross_mesh && !restart_data.mesh_file.empty() &&
+            restart_data.mesh_file != input.gri_file) {
+            use_cross_mesh = true;
+        }
+
+        bool ok = false;
+        if (use_cross_mesh) {
+            GriMesh src_mesh;
+            if (restart_data.mesh_file.empty()) {
+                std::cerr << "Failed to initialize from restart: source mesh path is empty for cross-mesh restart.\n";
+                return 1;
+            }
+            if (!read_gri(restart_data.mesh_file.c_str(), src_mesh)) {
+                std::cerr << "Failed to read source restart mesh: " << restart_data.mesh_file << "\n";
+                return 1;
+            }
+            ok = initialize_from_restart_cross_mesh(restart_data, src_mesh, order, mesh, U.data(), restart_err);
+            if (ok) {
+                std::cout << "Initialized from restart file: " << input.restart_file
+                          << " using cross-mesh interpolation from " << restart_data.mesh_file << "\n";
+            }
+        } else {
+            ok = initialize_from_restart(restart_data, order, mesh.Ne, U.data(), restart_err);
+            if (ok) {
+                std::cout << "Initialized from restart file: " << input.restart_file
+                          << " (p" << restart_data.order << " -> p" << order << ")\n";
+            }
+        }
+
+        if (!ok) {
+            std::cerr << "Failed to initialize from restart: " << restart_err << "\n";
+            return 1;
+        }
+    } else {
+        initialize_uniform(U.data(), mesh.Ne, order, params);
+        std::cout << "Initialized from uniform freestream.\n";
+    }
+
+    std::string case_name = stem(gri_file) + "_p" + std::to_string(order);
+    std::string case_dir  = "results/steady/" + case_name;
+    std::string out_res   = case_dir + "/residual_history.dat";
+    std::string checkpoint_vtu = case_dir + "/solution_latest.vtu";
+
+    /* ---- Solve to steady state ---- */
+    solve(mesh, U.data(), order, params, flux_fn,
+                 CFL, print_interval, max_iter, use_local_dt, out_res,
+                 checkpoint_interval, checkpoint_vtu);
+    std::cout << "Residual history written to: " << out_res << "\n";
+
+    /* ---- Write converged solution and restart coefficients ---- */
+    std::string out_vtu   = case_dir + "/solution.vtu";
+    std::string out_dat   = case_dir + "/restart.dat";
+
+    write_solution_vtu(mesh, U.data(), order, params, out_vtu);
+    std::cout << "Solution written to: " << out_vtu << "\n";
+    if (!write_restart_dat(out_dat, mesh, order, U.data(), input.gri_file)) {
+        std::cerr << "Failed to write restart file: " << out_dat << "\n";
+        return 1;
+    }
+    std::cout << "Restart coefficients written to: " << out_dat << "\n";
 
     return 0;
-}
-
-int run_unsteady() {
-    /* run steady then unsteady based on steady solution */
-    const double gammad = 1.4;
-    FluxFn flux_fn = fluxROE;
-    ReconFn recon_fn = reconstruct_nolimiter;
-
-    const char* gri_file = "/home/linfel/umich_course/623_CFD/mesh/ver2/global_refine_1.gri";
-    const char* out_dir =  "/home/linfel/umich_course/623_CFD/data/unsteady/test1";
-    const double t_end = 300;         /* run until periodic; adjust as needed */
-    const double vtu_interval = 0.2;	
-    const double CFL = 0.3;
-
-    GriMesh mesh;
-    if (!read_gri(gri_file, mesh)) {
-        std::cerr << "Failed to read mesh.\n";
-        return 1;
-    }
-    ensure_dir(out_dir);
-
-    ProblemParams params;
-    std::vector<double> U(mesh.Ne * 4);
-
-    std::cout << "Mesh: " << mesh.Ne << " elements, "
-              << mesh.num_interior_faces << " interior, "
-              << mesh.num_boundary_faces << " boundary faces.\n";
-
-    initialize_uniform(U.data(), mesh.Ne, 0.1, params);
-
-    solve_steady(mesh, U.data(), gammad, params, flux_fn, recon_fn, CFL, 50, 1000000);
-
-    std::string filename = std::string(out_dir) + "/steady_solution.vtu";
-    if (write_vtu(mesh, U.data(), gammad, filename.c_str()))
-        std::cout << "Output: " << filename << "\n";
-    else
-        std::cerr << "Failed to write VTU.\n";
-
-    solve_unsteady(mesh, U.data(), gammad, params, flux_fn, recon_fn, CFL, t_end, vtu_interval, 50, out_dir);
-    
-		return 0;
-}
-initialize_uniform_dg(U.data(), mesh.Ne, order, Mach, params);
-int main() {
-    /* switch run as needed */
-    run_steady();
-		//rst_unsteady();	
-    //run_unsteady();
 }

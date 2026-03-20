@@ -1,0 +1,9 @@
+order=2
+CFL=0.6
+gri_file=mesh/mesh0_curved.gri
+max_iter=1000000000
+print_interval=500
+checkpoint_interval=1000
+use_local_dt=1
+flux=HLLC
+restart_file=results/steady/mesh0_curved_p1/restart.dat

@@ -9,7 +9,10 @@ struct GriMesh {
     int Nn;
     int Ne;
     std::vector<double> V;        /* Nn*2: x,y per vertex */
-    std::vector<int> E;            /* Ne*3: triangle connectivity (node indices) */
+    std::vector<int> E;           /* Ne*3: corner-node connectivity (triangle vertices) */
+    std::vector<int> ElemGeomOrder;   /* Ne: geometric order q per element (typically 1 or 2) */
+    std::vector<int> ElemGeomOffset;  /* Ne+1: offsets into ElemGeomConn */
+    std::vector<int> ElemGeomConn;    /* concatenated geometric node connectivity in shapeL ordering */
     std::vector<double> Area;     /* Ne: area per element */
 
     int num_interior_faces;

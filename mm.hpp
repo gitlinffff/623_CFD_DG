@@ -7,8 +7,8 @@
 #include "readgri.hpp"
 #include "quad.hpp"
 
-/* 2x2 Jacobian matrix for the linear mapping 
- * from the reference triangle to physical element k.
+/* 2x2 Jacobian matrix for the affine mapping built from element corner nodes.
+ * Kept for legacy/debug usage; curved geometry uses geometry.hpp utilities.
  */
 Eigen::Matrix2d Jacobian(const GriMesh& mesh, int elem);
 
@@ -22,5 +22,20 @@ Eigen::MatrixXd computeRefMassMatrix(int order);
  * Layout corresponds to [element * Np + node].
  */
 Eigen::SparseMatrix<double> computeGlobalMassMatrix(const GriMesh& mesh, int order);
+
+/**
+ * Apply the block-diagonal mass matrix inverse in-place to a DG residual vector R.
+ *
+ * The DG time equation is  M * dU/dt = -R  (R = raw residual from calcRes).
+ * The correct time update is therefore  U_new = U - dt * M^{-1} * R.
+ * This function overwrites R with  M^{-1} * R  so that the caller can write
+ *   U -= dt * R  directly.
+ *
+ * For curved elements, M_k is assembled with quadrature using geometric Jacobian
+ * at each quadrature point, and M_k^{-1} is cached per element.
+ *
+ * R layout: [var * Ne * Np + elem * Np + basis]
+ */
+void applyInverseMassMatrix(const GriMesh& mesh, double* R, int order);
 
 #endif

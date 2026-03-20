@@ -23,14 +23,11 @@ struct ProblemParams {
 double getp0(const ProblemParams& p);
 
 /**
- * Initialize all cells to uniform state from inlet conditions at given Mach number.
- * Uses isentropic relations: p/p0 = (1 + (g-1)/2*M^2)^(-g/(g-1)), etc.
- * Flow direction: u = M*a*cos(alpha), v = M*a*sin(alpha).
+ * Initialize all DG DOFs to a uniform freestream state based on the inlet
+ * stagnation conditions and a fixed Mach number M=0.1 (as in Project 2).
  *
- * U: output, size Ne*4, conserved state [rho, rho*u, rho*v, E]
- * Ne: number of elements
- * M: Mach number (e.g. 0.1 for steady init)
+ * U layout (DG): U[var * Ne * Np + k * Np + i].
  */
-void initialize_uniform(double* U, int Ne, int order, double M, const ProblemParams& params);
+void initialize_uniform(double* U, int Ne, int order, const ProblemParams& params);
 
 #endif
