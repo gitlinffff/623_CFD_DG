@@ -212,23 +212,17 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
 }
 
 namespace {
-enum class DGBcType {
-	WALL,
-	INFLOW,
-	OUTFLOW,
-	FREESTREAM
-};
+	std::string to_lower(std::string s) {
+		std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+		return s;
+	}
 
-static std::string to_lower(std::string s) {
-	std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-	return s;
+	bool contains_token(const std::string& s, const char* token) {
+		return s.find(token) != std::string::npos;
+	}
 }
 
-static bool contains_token(const std::string& s, const char* token) {
-	return s.find(token) != std::string::npos;
-}
-
-static DGBcType classify_boundary_name(const std::string& name_raw) {
+DGBcType classify_boundary_name(const std::string& name_raw) {
 	std::string name = to_lower(name_raw);
 
 	if (name == "bgroup2" || name == "bgroup6")
@@ -249,7 +243,7 @@ static DGBcType classify_boundary_name(const std::string& name_raw) {
 
 	return DGBcType::FREESTREAM;
 }
-}
+
 
 void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
                     const double* U, const ProblemParams& params, FluxFn flux_fn,

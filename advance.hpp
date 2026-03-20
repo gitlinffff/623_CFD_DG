@@ -22,7 +22,8 @@ void calcRes(const GriMesh& mesh,
              double* dt_loc,
              double& dt_glb,
 						 bool in_ptb,
-						 const double t);
+						 const double t,
+						 const std::map<int, ElementMetrics>& curved_metrics);
 
 double residual_L1_norm(const GriMesh& mesh,
                            const double* R,

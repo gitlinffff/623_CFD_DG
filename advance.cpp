@@ -32,7 +32,8 @@ void calcRes(const GriMesh& mesh,
 						 double* dt_loc,
 						 double& dt_glb,
 						 bool in_ptb,
-						 const double t)
+						 const double t,
+						 const std::map<int, ElementMetrics>& curved_metrics)
 {
 	const int Np = (order + 1) * (order + 2) / 2;
 
@@ -46,7 +47,7 @@ void calcRes(const GriMesh& mesh,
 			cached_order = order;
 	}
 
-	addTerm2(mesh, R, order, phiq_cache, U, params);
+	addTerm2(mesh, R, order, phiq_cache, U, params, curved_metrics);
 
 	addSurfTerm(mesh, R, order, U, params, flux_fn, sum_s);
 
@@ -103,6 +104,11 @@ void solve(const GriMesh& mesh,
 			"Must use global time stepping when inflow unsteady perturbation is on.");
 	}
 
+	std::map<int, ElementMetrics> curved_metrics;
+	std::vector<BasisEval> phiq_cache = computePhiQ(order);
+	std::cout << "=========================" << std::endl;
+	precomputeCurvedMetrics(mesh, order, phiq_cache, curved_metrics);
+
 	const int Np = (order + 1) * (order + 2) / 2;
 	const double gammad = params.gammad;
 
@@ -135,7 +141,8 @@ void solve(const GriMesh& mesh,
 	}
 
 	while (step < max_iter && (!in_ptb || t < t_final - 1e-12)) {
-		calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_loc.data(), dt_glb, in_ptb, t);
+		calcRes(mesh, U, R.data(), order, params, flux_fn, CFL,
+		        dt_loc.data(), dt_glb, in_ptb, t, curved_metrics);
 
 		if (residual_stride > 0 && step % residual_stride == 0) {
 			double R1 = residual_L1_norm(mesh, R.data(), order);
@@ -170,7 +177,8 @@ void solve(const GriMesh& mesh,
 			}
 		}
 
-		calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dmy.data(), dt_gdmy, in_ptb, t+dt_glb);
+		calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dmy.data(),
+		        dt_gdmy, in_ptb, t+dt_glb, curved_metrics);
 		applyInverseMassMatrix(mesh, R.data(), order);
 		#pragma omp parallel for schedule(static)
 		for (int k = 0; k < mesh.Ne; ++k) {
@@ -182,7 +190,8 @@ void solve(const GriMesh& mesh,
 			}
 		}
 
-		calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dmy.data(), dt_gdmy, in_ptb, t+0.5*dt_glb);
+		calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dmy.data(),
+		        dt_gdmy, in_ptb, t+0.5*dt_glb, curved_metrics);
 		applyInverseMassMatrix(mesh, R.data(), order);
 		#pragma omp parallel for schedule(static)
 		for (int k = 0; k < mesh.Ne; ++k) {
