@@ -1,0 +1,13 @@
+order={{ORDER}}
+CFL={{CFL}}
+gri_file=/home/linfel/umich_course/623_DG/dg_crv/mesh/{{MESH}}_curved.gri
+max_iter=100000000
+print_interval=200
+use_local_dt=0
+inflow_perturb=1
+flux=HLLC
+
+restart_file=/home/linfel/umich_course/623_DG/curved_steady_sol/{{MESH}}_curved_p{{ORDER}}/restart.dat
+vtu_interval = 2.0
+dat_interval = 2.0
+t_final = 350.0

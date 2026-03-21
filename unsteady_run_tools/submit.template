@@ -1,0 +1,14 @@
+#!/bin/bash
+#SBATCH --time=08:00:00
+#SBATCH --job-name={{MESH}}p{{ORDER}}_unst_crv
+#SBATCH --account=aerosp623w26_class
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=36
+#SBATCH --mail-user=linfel@umich.edu
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH -o %x.out.%j
+#SBATCH -e %x.err.%j
+
+export OMP_NUM_THREADS=36
+./main
