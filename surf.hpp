@@ -29,6 +29,6 @@ void addSurfTerm(const GriMesh& mesh, double* R, int order,
  */
 void addBndSurfTerm(const GriMesh& mesh, double* R, int order,
                     const double* U, const ProblemParams& params, FluxFn flux_fn,
-										std::vector<double>* sum_s = nullptr);
+										bool in_ptb, const double t, std::vector<double>* sum_s = nullptr);
 
 #endif // SURF_HPP

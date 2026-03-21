@@ -34,9 +34,12 @@ bool read_input_file(const std::string& file, InputParams& p)
             else if (key=="max_iter")       p.max_iter = std::stoi(val);
             else if (key=="print_interval") p.print_interval = std::stoi(val);
             else if (key=="use_local_dt")   p.use_local_dt = std::stoi(val);
+            else if (key=="inflow_perturb") p.in_ptb = std::stoi(val);
 						else if (key=="flux")           p.flux = val;
             else if (key=="restart_file")   p.restart_file = val;
-            else if (key=="checkpoint_interval") p.checkpoint_interval = std::stoi(val);
+            else if (key=="vtu_interval")   p.vtu_interval = std::stod(val);
+            else if (key=="dat_interval")   p.dat_interval = std::stod(val);
+            else if (key=="t_final")        p.t_final = std::stod(val);
         }
     }
 

@@ -312,3 +312,24 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
     if (log_message)
         std::cout << "[write_vtu] Solution written to: " << filepath << "\n";
 }
+
+void write_pvd_manifest(const std::string& case_dir, const std::vector<double>& times) {
+	std::ofstream pvd(case_dir + "/solution.pvd");
+	if (!pvd) return;
+
+	pvd << "<?xml version=\"1.0\"?>\n"
+			<< "<VTKFile type=\"Collection\" version=\"1.0\" byte_order=\"LittleEndian\">\n"
+			<< "  <Collection>\n";
+
+	for (double time : times) {
+		char fname[256];
+		// Ensure this matches your VTU naming convention exactly!
+		std::snprintf(fname, sizeof(fname), "solution_t_%05.0f.vtu", time);
+
+		pvd << "    <DataSet timestep=\"" << time
+				<< "\" group=\"\" part=\"0\" file=\"" << fname << "\"/>\n";
+	}
+
+	pvd << "  </Collection>\n"
+			<< "</VTKFile>\n";
+}

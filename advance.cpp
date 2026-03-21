@@ -9,6 +9,7 @@
 #include "geometry.hpp"
 #include "mm.hpp"
 #include "write_vtu.hpp"
+#include "restart.hpp"
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -36,8 +37,10 @@ void calcRes(const GriMesh& mesh,
 						 const ProblemParams& params,
 						 FluxFn flux_fn,
 						 double CFL,
-						 double* dt_local, // Size: mesh.Ne
-						 double& dt_global)
+						 double* dt_loc, // Size: mesh.Ne
+						 double& dt_glb,
+             bool in_ptb,
+             const double t)
 {
 	const int Np = (order + 1) * (order + 2) / 2;
 
@@ -60,26 +63,26 @@ void calcRes(const GriMesh& mesh,
 	addSurfTerm(mesh, R, order, U, params, flux_fn, &sum_s);
 
 	// Boundary faces: same BC interpretation as FV solver
-	addBndSurfTerm(mesh, R, order, U, params, flux_fn, &sum_s);
+	addBndSurfTerm(mesh, R, order, U, params, flux_fn, in_ptb, t, &sum_s);
 
 	// Calculate dt_local and dt_global
 	// Warm up geometric-area cache once before entering the parallel loop.
 	// This avoids concurrent lazy-cache rebuilds in get_geometric_element_area.
 	const std::vector<double>& elem_area = get_geometric_element_areas(mesh);
-	dt_global = 1.e20; // Initialize with large value
+	dt_glb = 1.e20; // Initialize with large value
 	
-	#pragma omp parallel for schedule(static) reduction(min:dt_global)
+	#pragma omp parallel for schedule(static) reduction(min:dt_glb)
 	for (int k = 0; k < mesh.Ne; ++k) {
 		double Ak = elem_area[k];
 
 		if (sum_s[k] * (2 * order + 1) > 1e-15) {
-			dt_local[k] = (CFL * 2.0 * Ak) / sum_s[k] / (2 * order + 1);
+			dt_loc[k] = (CFL * 2.0 * Ak) / sum_s[k] / (2 * order + 1);
 		} else {
-		dt_local[k] = 1e-6; // Safety fallback
+		dt_loc[k] = 1e-6; // Safety fallback
 		}
-		if (dt_local[k] < dt_global) { dt_global = dt_local[k]; }
+		if (dt_loc[k] < dt_glb) { dt_glb = dt_loc[k]; }
 	}
-	if (dt_global >= 1.e20) {
+	if (dt_glb >= 1.e20) {
 		throw std::runtime_error("Global minimum dt calculation failed.");
 	}
 }
@@ -106,23 +109,35 @@ void solve(const GriMesh& mesh,
 					 int residual_stride,
 					 int max_iter,
 					 bool use_local_dt,
+           bool in_ptb,
            const std::string& residual_history_file,
-           int checkpoint_interval,
-           const std::string& checkpoint_vtu_file)
+           const std::string& case_dir,
+           const double vtu_interval,
+           const double dat_interval,
+           const double t_final,
+           const std::string& mesh_file)
 {
+	if (in_ptb && use_local_dt) {
+		throw std::runtime_error(
+			"Must use global time stepping when inflow unsteady perturbation is on.");
+	}
+
 	const int Np = (order + 1) * (order + 2) / 2;
 	const double gammad = params.gammad;
 
 	std::vector<double> R(4 * mesh.Ne * Np);
 	std::vector<double> U1(4 * mesh.Ne * Np);
 	std::vector<double> U2(4 * mesh.Ne * Np);
-	std::vector<double> dt_local(mesh.Ne);
-	std::vector<double> dt_dummy(mesh.Ne);
-	double dt_global, dt_global_dummy;
+	std::vector<double> dt_loc(mesh.Ne);
+	std::vector<double> dt_dmy(mesh.Ne);
+	double dt_glb, dt_gdmy;
 
 	double R0 = -1.0;
 	double t = 0.0;
 	int step = 0;
+	double next_vtu_t = vtu_interval;
+	double next_dat_t = dat_interval;
+	std::vector<double> vtu_times;
 
 	std::ofstream history_out;
 	if (!residual_history_file.empty()) {
@@ -138,9 +153,9 @@ void solve(const GriMesh& mesh,
 		history_out << std::setprecision(17);
 	}
 
-	while (step < max_iter) {
+	while (step < max_iter && (!in_ptb || t < t_final - 1e-12)) {
 		// calculate residuals at current state
-		calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_local.data(), dt_global);
+		calcRes(mesh, U, R.data(), order, params, flux_fn, CFL, dt_loc.data(), dt_glb, in_ptb, t);
 		
 		if (residual_stride > 0 && step % residual_stride == 0) {
 			double R1 = residual_L1_norm(mesh, R.data(), order);
@@ -161,7 +176,7 @@ void solve(const GriMesh& mesh,
 		}
 	
 		auto get_dt = [&](int k) {
-			return use_local_dt ? dt_local[k] : dt_global;
+			return use_local_dt ? dt_loc[k] : dt_glb;
 		}; // an internal function to determine if dt_local or dt_global to use
 
 		// SSP-RK3 stage 1: U1_k = U_k - dt_k * M_k^{-1} R_k
@@ -177,7 +192,7 @@ void solve(const GriMesh& mesh,
 		}
 
 		// stage 2: U2_k = 0.75 U_k + 0.25 (U1_k - dt_k * M_k^{-1} R1_k)
-		calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
+		calcRes(mesh, U1.data(), R.data(), order, params, flux_fn, CFL, dt_dmy.data(), dt_gdmy, in_ptb, t+dt_glb);
 		applyInverseMassMatrix(mesh, R.data(), order);
 		#pragma omp parallel for schedule(static)
 		for (int k = 0; k < mesh.Ne; ++k) {
@@ -190,7 +205,7 @@ void solve(const GriMesh& mesh,
 		}
 
 		// stage 3: U_k = 1/3 U_k + 2/3 (U2_k - dt_k * M_k^{-1} R2_k)
-		calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dummy.data(), dt_global_dummy);
+		calcRes(mesh, U2.data(), R.data(), order, params, flux_fn, CFL, dt_dmy.data(), dt_gdmy, in_ptb, t+0.5*dt_glb);
 		applyInverseMassMatrix(mesh, R.data(), order);
 		#pragma omp parallel for schedule(static)
 		for (int k = 0; k < mesh.Ne; ++k) {
@@ -202,13 +217,24 @@ void solve(const GriMesh& mesh,
 			}
 		}
 
-		t += dt_global; // t represents physical time for global time stepping
+		t += dt_glb; // t represents physical time for global time stepping
 		++step;
 
-		if (checkpoint_interval > 0 &&
-				!checkpoint_vtu_file.empty() &&
-				step % checkpoint_interval == 0) {
-			write_solution_vtu(mesh, U, order, params, checkpoint_vtu_file, false);
+		if (in_ptb) {
+			if (dat_interval > 0. && t >= next_dat_t - 1e-12) { // .dat output
+					char dat_path[256];
+					std::snprintf(dat_path, sizeof(dat_path), "%s/restart_t_%05.0f.dat", case_dir.c_str(), t);
+					write_restart_dat(dat_path, mesh, order, U, mesh_file);
+					next_dat_t += dat_interval;
+			}
+			if (vtu_interval > 0. && t >= next_vtu_t - 1e-12) { // .vtu output
+					char vtu_path[256];
+					std::snprintf(vtu_path, sizeof(vtu_path), "%s/solution_t_%05.0f.vtu", case_dir.c_str(), t);
+					write_solution_vtu(mesh, U, order, params, vtu_path, false);
+					vtu_times.push_back(t);
+					write_pvd_manifest(case_dir, vtu_times);
+					next_vtu_t += vtu_interval;
+			}
 		}
 	}
 }

@@ -32,4 +32,6 @@ void write_solution_vtu(const GriMesh& mesh, const double* U, int order,
                         const ProblemParams& params, const std::string& filepath,
                         bool log_message = true);
 
+void write_pvd_manifest(const std::string& case_dir, const std::vector<double>& times);
+
 #endif
