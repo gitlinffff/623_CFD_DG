@@ -63,18 +63,21 @@ void calcRes(const GriMesh& mesh,
 	addBndSurfTerm(mesh, R, order, U, params, flux_fn, &sum_s);
 
 	// Calculate dt_local and dt_global
+	// Warm up geometric-area cache once before entering the parallel loop.
+	// This avoids concurrent lazy-cache rebuilds in get_geometric_element_area.
+	const std::vector<double>& elem_area = get_geometric_element_areas(mesh);
 	dt_global = 1.e20; // Initialize with large value
+	
 	#pragma omp parallel for schedule(static) reduction(min:dt_global)
 	for (int k = 0; k < mesh.Ne; ++k) {
-		double Ak = get_geometric_element_area(mesh, k);
+		double Ak = elem_area[k];
 
 		if (sum_s[k] * (2 * order + 1) > 1e-15) {
 			dt_local[k] = (CFL * 2.0 * Ak) / sum_s[k] / (2 * order + 1);
-			// The (2p + 1) factor is for DG stability
 		} else {
-			dt_local[k] = 1e-6; // Safety fallback
+		dt_local[k] = 1e-6; // Safety fallback
 		}
-		if (dt_local[k] < dt_global) {dt_global = dt_local[k];}
+		if (dt_local[k] < dt_global) { dt_global = dt_local[k]; }
 	}
 	if (dt_global >= 1.e20) {
 		throw std::runtime_error("Global minimum dt calculation failed.");
